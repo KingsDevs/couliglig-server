@@ -3,12 +3,13 @@ from fastapi import APIRouter, HTTPException
 from models import RobotRegistration
 from services import register_host
 
-router = APIRouter(prefix="/robots", tags=["robots"])
+register_router = APIRouter(prefix="/robots", tags=["robots"])
 
 
-@router.post("/register")
+@register_router.post("/register")
 def register_robot(data: RobotRegistration):
     try:
+        print(f"Registering host {data.hostname} with IP {data.ip}")
         register_host(data.hostname, data.ip)
     except PermissionError:
         raise HTTPException(

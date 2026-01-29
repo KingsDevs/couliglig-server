@@ -1,0 +1,23 @@
+ { 
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI (uvicorn)",
+      "type": "python",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "main:app",
+        "--reload"
+      ],
+      "justMyCode": true
+    },
+    {
+      "name": "Python Script",
+      "type": "python",
+      "request": "launch",
+      "program": "${file}",   // lets you run & debug any open Python file
+      "console": "integratedTerminal"
+    },
+  ]
+}
