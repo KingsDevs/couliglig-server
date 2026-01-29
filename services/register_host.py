@@ -1,7 +1,6 @@
 import os
-import os
 
-HOSTS_FILE = "/data/robots.hosts"
+HOSTS_FILE = os.getenv("HOSTS_FILE", "/data/robots.hosts")
 # HOSTS_FILE = "/home/karlshane/couliglig-server/temp.hosts"
 
 def register_host(hostname: str, ip: str):

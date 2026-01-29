@@ -18,7 +18,7 @@ services:
     restart: always
     volumes:
       # dnsmasq-managed hosts file (host → container)
-      - /etc/dnsmasq.d/robots.hosts:/data/robots.hosts
+      - /var/lib/dnsmasq/robots.hosts:/data/robots.hosts
     environment:
       - HOSTS_FILE=/data/robots.hosts
     ports:
