@@ -72,7 +72,7 @@ def get_robot_statuses():
         statuses = []
         for (hostname, ip) in robot_list:
             try:
-                url = f"http://{ip}:8000/" 
+                url = f"http://{ip}:8000/status" 
                 response = requests.get(url, timeout=5) 
                 if response.status_code == 200:
                     statuses.append(RobotStatus(hostname=hostname, ip=ip))
