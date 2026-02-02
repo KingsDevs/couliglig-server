@@ -1,1 +1,1 @@
-from .register import register_router
+from .robots import register_router

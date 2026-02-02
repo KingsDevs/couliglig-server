@@ -27,3 +27,10 @@ def register_robot(data: RobotRegistration):
         "hostname": data.hostname,
         "ip": data.ip,
     }
+
+@register_router.get("/")
+def get_robot_statuses():
+    return {
+        "status": "ok",
+        "message": "Robot registration endpoint is active."
+    }
