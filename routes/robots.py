@@ -78,35 +78,32 @@ def get_robot_statuses():
                 url = f"http://{ip}:8000/status"
                 response = requests.get(url, timeout=5)
 
-                if response.status_code == 200:
+                if response.status_code != 200:
+                    raise RuntimeError(f"HTTP {response.status_code}")
+
+                try:
                     data = response.json()
+                except ValueError:
+                    raise RuntimeError("Invalid JSON")
 
-                    statuses.append(RobotStatus(
-                        hostname=data["hostname"],
-                        robot_namespace=data.get("robot_namespace", ""),
-                        domain_id=data.get("domain_id"),
-                        ip=data["ip"],
-                        uptime=data["uptime"]
-                    ))
-                else:
-                    statuses.append(RobotStatus(
-                        hostname=hostname,
-                        robot_namespace="",
-                        domain_id=None,
-                        ip=ip,
-                        uptime="",
-                        error=f"Failed to fetch status (HTTP {response.status_code})"
-                    ))
+                statuses.append(RobotStatus(
+                    hostname=data.get("hostname", hostname),
+                    robot_namespace=data.get("robot_namespace", ""),
+                    domain_id=data.get("domain_id"),
+                    ip=data.get("ip", ip),
+                    uptime=data.get("uptime", ""),
+                ))
 
-            except requests.exceptions.RequestException as e:
+            except Exception as e:
                 statuses.append(RobotStatus(
                     hostname=hostname,
                     robot_namespace="",
                     domain_id=None,
                     ip=ip,
                     uptime="",
-                    error=f"Could not connect to robot: {str(e)}"
+                    error=str(e)
                 ))
+
 
     except Exception as e:
         raise HTTPException(

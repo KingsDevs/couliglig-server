@@ -7,6 +7,7 @@ class RobotStatus(BaseModel):
     domain_id: Optional[int]
     ip: str
     uptime: str
+    error: Optional[str] = None
 
 class RobotStatusesResponse(BaseModel):
     status: str
