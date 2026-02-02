@@ -63,16 +63,14 @@ def register_robot(data: RobotRegistration):
 @register_router.get("", response_model=RobotStatusesResponse)
 def get_robot_statuses():
     try:
-        # Retrieve the dictionary of registrations from Redis
         existing_data = redis_client.get("robot_registrations")
         if existing_data:
-            robot_dict = json.loads(existing_data)  # Deserialize JSON to a Python dictionary
+            robot_dict = json.loads(existing_data)
         else:
             robot_dict = {}
 
         statuses = []
 
-        # Loop through each hostname and IP in the dictionary
         for hostname, ip in robot_dict.items():
             try:
                 url = f"http://{ip}:8000/status"
@@ -104,9 +102,10 @@ def get_robot_statuses():
                     error=str(e)
                 ))
 
-
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return RobotStatusesResponse(
+        status="ok",
+        registrations=statuses
+    )
