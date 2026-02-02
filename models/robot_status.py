@@ -3,8 +3,10 @@ from typing import List, Optional
 
 class RobotStatus(BaseModel):
     hostname: str
+    robot_namespace: str
+    domain_id: Optional[int]
     ip: str
-    error: Optional[str] = None
+    uptime: str
 
 class RobotStatusesResponse(BaseModel):
     status: str

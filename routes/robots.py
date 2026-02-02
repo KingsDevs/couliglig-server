@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, HTTPException
 from models import RobotRegistration, RobotStatus, RobotStatusesResponse
 from services import register_host
@@ -19,6 +18,8 @@ redis_client = redis.StrictRedis(
     decode_responses=True
 )
 
+redis_client.delete("robot_registrations")  # Clear the registrations on startup
+
 def is_couliglig_lan(name: str) -> bool:
     return name.startswith("couliglig")
 
@@ -29,18 +30,18 @@ def register_robot(data: RobotRegistration):
         register_host(data.hostname, data.ip)
 
         if is_couliglig_lan(data.hostname):
-            # print(f"Storing registration in Redis for {data.hostname}")
+            # Retrieve the existing dictionary from Redis
             existing_data = redis_client.get("robot_registrations")
             if existing_data:
-                robot_list = json.loads(existing_data)
+                robot_dict = json.loads(existing_data)  # Deserialize JSON to a Python dictionary
             else:
-                robot_list = []
+                robot_dict = {}
 
-            robot_list.append((data.hostname, data.ip))
-            redis_client.set("robot_registrations", json.dumps(robot_list)) 
+            # Add or update the hostname with its IP
+            robot_dict[data.hostname] = data.ip
 
-        # else:
-        #     print(f"Hostname {data.hostname} is not a couliglig.lan address; skipping Redis storage.")
+            # Store the updated dictionary back in Redis
+            redis_client.set("robot_registrations", json.dumps(robot_dict))  # Serialize dictionary to JSON
 
     except PermissionError:
         raise HTTPException(
@@ -62,18 +63,20 @@ def register_robot(data: RobotRegistration):
 @register_router.get("", response_model=RobotStatusesResponse)
 def get_robot_statuses():
     try:
-        # Retrieve the list of tuples from Redis
+        # Retrieve the dictionary of registrations from Redis
         existing_data = redis_client.get("robot_registrations")
         if existing_data:
-            robot_list = json.loads(existing_data)  # Deserialize JSON to a Python list
+            robot_dict = json.loads(existing_data)  # Deserialize JSON to a Python dictionary
         else:
-            robot_list = []
+            robot_dict = {}
 
         statuses = []
-        for (hostname, ip) in robot_list:
+
+        # Loop through each hostname and IP in the dictionary
+        for hostname, ip in robot_dict.items():
             try:
-                url = f"http://{ip}:8000/status" 
-                response = requests.get(url, timeout=5) 
+                url = f"http://{ip}:8000/status"  # Construct the URL for the robot's status endpoint
+                response = requests.get(url, timeout=5)
                 if response.status_code == 200:
                     statuses.append(RobotStatus(hostname=hostname, ip=ip))
                 else:
