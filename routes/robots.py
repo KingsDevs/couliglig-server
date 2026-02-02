@@ -4,12 +4,16 @@ from models import RobotRegistration
 from services import register_host
 import redis
 import json
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 register_router = APIRouter(prefix="/robots", tags=["robots"])
 
 redis_client = redis.StrictRedis(
-    host='localhost',  
-    port=6379,        
+    host=os.getenv("REDIS_HOST", "localhost"), 
+    port=os.getenv("REDIS_PORT", 6379),       
     db=0,           
     decode_responses=True
 )
