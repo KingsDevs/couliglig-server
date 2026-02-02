@@ -75,27 +75,39 @@ def get_robot_statuses():
         # Loop through each hostname and IP in the dictionary
         for hostname, ip in robot_dict.items():
             try:
-                url = f"http://{ip}:8000/status"  # Construct the URL for the robot's status endpoint
+                url = f"http://{ip}:8000/status"
                 response = requests.get(url, timeout=5)
+
                 if response.status_code == 200:
-                    statuses.append(RobotStatus(hostname=hostname, ip=ip))
+                    data = response.json()
+
+                    statuses.append(RobotStatus(
+                        hostname=data["hostname"],
+                        robot_namespace=data.get("robot_namespace", ""),
+                        domain_id=data.get("domain_id"),
+                        ip=data["ip"],
+                        uptime=data["uptime"]
+                    ))
                 else:
                     statuses.append(RobotStatus(
                         hostname=hostname,
+                        robot_namespace="",
+                        domain_id=None,
                         ip=ip,
+                        uptime="",
                         error=f"Failed to fetch status (HTTP {response.status_code})"
                     ))
+
             except requests.exceptions.RequestException as e:
                 statuses.append(RobotStatus(
                     hostname=hostname,
+                    robot_namespace="",
+                    domain_id=None,
                     ip=ip,
+                    uptime="",
                     error=f"Could not connect to robot: {str(e)}"
                 ))
 
-        return RobotStatusesResponse(
-            status="ok",
-            registrations=statuses
-        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
