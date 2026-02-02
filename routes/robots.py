@@ -19,7 +19,7 @@ redis_client = redis.StrictRedis(
 )
 
 def is_couliglig_lan(name: str) -> bool:
-    return name.startswith("couliglig") and name.endswith(".lan")
+    return name.startswith("couliglig")
 
 @register_router.post("/register")
 def register_robot(data: RobotRegistration):
