@@ -22,7 +22,7 @@ redis_client = redis.StrictRedis(
 def is_couliglig_lan(name: str) -> bool:
     return name.startswith("couliglig")
 
-@register_router.post("/register", response_model=RobotStatusesResponse)
+@register_router.post("/register")
 def register_robot(data: RobotRegistration):
     try:
         print(f"Registering host {data.hostname} with IP {data.ip}")
