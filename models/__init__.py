@@ -1,1 +1,2 @@
 from .robot_registration import RobotRegistration
+from .robot_status import RobotStatus, RobotStatusesResponse
