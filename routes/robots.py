@@ -28,6 +28,7 @@ def register_robot(data: RobotRegistration):
         register_host(data.hostname, data.ip)
 
         if is_couliglig_lan(data.hostname):
+            print(f"Storing registration in Redis for {data.hostname}")
             existing_data = redis_client.get("robot_registrations")
             if existing_data:
                 robot_list = json.loads(existing_data)
@@ -36,6 +37,9 @@ def register_robot(data: RobotRegistration):
 
             robot_list.append((data.hostname, data.ip))
             redis_client.set("robot_registrations", json.dumps(robot_list)) 
+
+        else:
+            print(f"Hostname {data.hostname} is not a couliglig.lan address; skipping Redis storage.")
 
     except PermissionError:
         raise HTTPException(
