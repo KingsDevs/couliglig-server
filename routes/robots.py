@@ -59,6 +59,7 @@ def get_robot_statuses():
     try:
         # Retrieve the list of tuples from Redis
         existing_data = redis_client.get("robot_registrations")
+        print("Fetched from Redis:", existing_data)
         if existing_data:
             robot_list = json.loads(existing_data)  # Deserialize JSON to a Python list
         else:
