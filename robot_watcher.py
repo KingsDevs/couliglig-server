@@ -55,8 +55,8 @@ def check_robots():
 def main():
     logging.info("Starting robot watcher scheduler")
 
-    # run every 60s
-    schedule.every(1).seconds.do(check_robots)
+    # run every 20s
+    schedule.every(20).seconds.do(check_robots)
 
     # run once on startup
     check_robots()
