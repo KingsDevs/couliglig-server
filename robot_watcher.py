@@ -38,10 +38,22 @@ def check_robots():
         url = f"http://{ip}:8000{HEARTBEAT_PATH}"
         try:
             r = requests.get(url, timeout=TIMEOUT)
-            print(r)
             if r.status_code != 200:
                 raise RuntimeError(f"HTTP {r.status_code}")
+            
+            response = r.json()
+            if response.get("hostname") != hostname:
+                raise RuntimeError("Hostname mismatch")
+            
+            updated[hostname] = {
+                "hostname": hostname,
+                "ip": ip,
+                "namespace": response.get("namespace", "couliglig"),
+                "ros_domain_id": response.get("ros_domain_id", 0),
+                "timestamp": response.get("timestamp", "")
+            }
 
+    
             logging.info(f"{hostname} ({ip}) OK")
 
         except Exception as e:
@@ -56,8 +68,8 @@ def check_robots():
 def main():
     logging.info("Starting robot watcher scheduler")
 
-    # run every 20s
-    schedule.every(20).seconds.do(check_robots)
+    # run every 5s
+    schedule.every(5).seconds.do(check_robots)
 
     # run once on startup
     check_robots()

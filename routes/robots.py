@@ -1,11 +1,12 @@
+import json
+import redis
+import os
+import requests
 from fastapi import APIRouter, HTTPException
 from models import RobotRegistration, RobotStatus, RobotStatusesResponse, RobotOnline, RobotOnlineResponse
 from services import register_host
-import redis
-import json
 from dotenv import load_dotenv
-import os
-import requests
+from datetime import datetime
 
 load_dotenv()
 
@@ -49,8 +50,17 @@ def register_robot(data: RobotRegistration):
                 ip_dict = json.loads(existing_ips)
             else:
                 ip_dict = {}
-            ip_dict[data.hostname] = data.ip
+
+            ip_dict[data.hostname] = {
+                "hostname": data.hostname,
+                "ip": str(data.ip),
+                "namespace": data.namespace or "couliglig",
+                "ros_domain_id": data.ros_domain_id or 0,
+                "timestamp": datetime.now().isoformat() + "Z"
+            }
+
             redis_client.set("robot_ips", json.dumps(ip_dict))
+
 
 
     except PermissionError:
@@ -129,23 +139,35 @@ def get_robot_statuses():
 @register_router.get("/online", response_model=RobotOnlineResponse)
 def get_online_robots():
     try:
-        existing_data = redis_client.get("robot_ips")
-        if existing_data:
-            ip_dict = json.loads(existing_data)
-        else:
-            ip_dict = {}
+        raw = redis_client.get("robot_ips")
+        if not raw:
+            return RobotOnlineResponse(data=[])
 
+        robot_dict = json.loads(raw)
         online_robots = []
 
-        for hostname, ip in ip_dict.items():
-            online_robots.append(RobotOnline(
-                hostname=hostname,
-                ip=ip
-            ))
+        for hostname, payload in robot_dict.items():
+            # Backward compatibility if string IP still exists
+            if isinstance(payload, str):
+                online_robots.append(
+                    RobotOnline(
+                        hostname=hostname,
+                        ip=payload
+                    )
+                )
+                continue
+
+            online_robots.append(
+                RobotOnline(
+                    hostname=payload.get("hostname", hostname),
+                    ip=payload.get("ip"),
+                    namespace=payload.get("namespace", "couliglig"),
+                    ros_domain_id=payload.get("ros_domain_id", 0),
+                    timestamp=payload.get("timestamp", "")
+                )
+            )
+
+        return RobotOnlineResponse(data=online_robots)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    return RobotOnlineResponse(
-        data=online_robots
-    )
