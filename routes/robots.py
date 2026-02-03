@@ -19,6 +19,7 @@ redis_client = redis.StrictRedis(
 )
 
 redis_client.delete("robot_registrations")  # Clear the registrations on startup
+# redis_client.delete("robot_ips")  # Clear the IPs on startup
 
 def is_couliglig_lan(name: str) -> bool:
     return name.startswith("couliglig")
@@ -42,6 +43,15 @@ def register_robot(data: RobotRegistration):
 
             # Store the updated dictionary back in Redis
             redis_client.set("robot_registrations", json.dumps(robot_dict))  # Serialize dictionary to JSON
+
+            existing_ips = redis_client.get("robot_ips")
+            if existing_ips:
+                ip_dict = json.loads(existing_ips)
+            else:
+                ip_dict = {}
+            ip_dict[data.hostname] = data.ip
+            redis_client.set("robot_ips", json.dumps(ip_dict))
+
 
     except PermissionError:
         raise HTTPException(
@@ -110,19 +120,3 @@ def get_robot_statuses():
         registrations=statuses
     )
 
-@register_router.get("/ips")
-def get_ip_addresses():
-    try:
-        existing_data = redis_client.get("robot_registrations")
-        if existing_data:
-            robot_dict = json.loads(existing_data)
-        else:
-            robot_dict = {}
-
-        return {
-            "status": "ok",
-            "ips": robot_dict
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
