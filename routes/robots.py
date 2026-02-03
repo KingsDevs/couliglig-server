@@ -28,7 +28,7 @@ def is_couliglig_lan(name: str) -> bool:
 @register_router.post("/register")
 def register_robot(data: RobotRegistration):
     try:
-        print(f"Registering host {data.hostname} with IP {data.ip}")
+        print(f"Registering host {data.hostname} with IP {data.ip}, namespace {data.namespace}, domain ID {data.ros_domain_id}")
         register_host(data.hostname, data.ip)
 
         if is_couliglig_lan(data.hostname):
