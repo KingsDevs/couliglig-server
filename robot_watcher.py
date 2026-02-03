@@ -9,7 +9,7 @@ import redis
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_KEY = "robot_ips"
-HEARTBEAT_PATH = "/health"
+HEARTBEAT_PATH = "/status/health"
 TIMEOUT = 3
 
 logging.basicConfig(
