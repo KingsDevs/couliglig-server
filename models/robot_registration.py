@@ -1,8 +1,8 @@
-from pydantic import BaseModel, IPvAnyAddress
+from pydantic import BaseModel
 from typing import Optional
 
 class RobotRegistration(BaseModel):
     hostname: str
-    ip: IPvAnyAddress
+    ip: str
     namespace: Optional[str] = None
     ros_domain_id: Optional[int] = None
