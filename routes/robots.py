@@ -61,19 +61,18 @@ def register_robot(data: RobotRegistration):
 
             redis_client.set("robot_ips", json.dumps(ip_dict))
 
-
-
     except PermissionError:
         raise HTTPException(
             status_code=403,
             detail="Requires root privileges"
         )
     except Exception as e:
+        print(f"Error registering robot: {e}")
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
-
+    
     return {
         "status": "ok",
         "hostname": data.hostname,

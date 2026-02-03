@@ -34,7 +34,14 @@ def check_robots():
     robot_ips = json.loads(raw)
     updated = robot_ips.copy()
 
-    for hostname, ip in robot_ips.items():
+    for hostname, value in robot_ips.items():
+        if isinstance(value, str):
+            ip = value
+        elif isinstance(value, dict):
+            ip = value.get("ip")
+        else:
+            continue
+
         url = f"http://{ip}:8000{HEARTBEAT_PATH}"
         try:
             r = requests.get(url, timeout=TIMEOUT)
