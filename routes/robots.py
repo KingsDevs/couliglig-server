@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from models import RobotRegistration, RobotStatus, RobotStatusesResponse
+from models import RobotRegistration, RobotStatus, RobotStatusesResponse, RobotOnline, RobotOnlineResponse
 from services import register_host
 import redis
 import json
@@ -84,7 +84,13 @@ def get_robot_statuses():
         for hostname, ip in robot_dict.items():
             try:
                 url = f"http://{ip}:8000/status"
-                response = requests.get(url, timeout=5)
+                try:
+                    response = requests.get(url, timeout=5)
+                except requests.ConnectionError:
+                    # Remove the offline robot from the registrations
+                    del robot_dict[hostname]
+                    redis_client.set("robot_registrations", json.dumps(robot_dict))
+                    continue
 
                 if response.status_code != 200:
                     raise RuntimeError(f"HTTP {response.status_code}")
@@ -120,3 +126,26 @@ def get_robot_statuses():
         registrations=statuses
     )
 
+@register_router.get("/online", response_model=RobotOnlineResponse)
+def get_online_robots():
+    try:
+        existing_data = redis_client.get("robot_ips")
+        if existing_data:
+            ip_dict = json.loads(existing_data)
+        else:
+            ip_dict = {}
+
+        online_robots = []
+
+        for hostname, ip in ip_dict.items():
+            online_robots.append(RobotOnline(
+                hostname=hostname,
+                ip=ip
+            ))
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return RobotOnlineResponse(
+        data=online_robots
+    )
