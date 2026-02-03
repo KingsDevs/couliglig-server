@@ -38,6 +38,7 @@ def check_robots():
         url = f"http://{ip}:8000{HEARTBEAT_PATH}"
         try:
             r = requests.get(url, timeout=TIMEOUT)
+            print(r)
             if r.status_code != 200:
                 raise RuntimeError(f"HTTP {r.status_code}")
 
