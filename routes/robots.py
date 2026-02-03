@@ -109,3 +109,20 @@ def get_robot_statuses():
         status="ok",
         registrations=statuses
     )
+
+@register_router.get("/ips")
+def get_ip_addresses():
+    try:
+        existing_data = redis_client.get("robot_registrations")
+        if existing_data:
+            robot_dict = json.loads(existing_data)
+        else:
+            robot_dict = {}
+
+        return {
+            "status": "ok",
+            "ips": robot_dict
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
