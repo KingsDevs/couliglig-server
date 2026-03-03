@@ -2,8 +2,13 @@ from fastapi import FastAPI
 from routes import register_router
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from services import get_db_session
 import html
 import os
+
+# Establish a database session at startup to ensure the database is initialized
+session = get_db_session()
+session.close()
 
 HOSTS_FILE = os.getenv("HOSTS_FILE", "/data/robots.hosts")
 # HOSTS_FILE = "/home/karlshane/couliglig-server/temp.hosts"

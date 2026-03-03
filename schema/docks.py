@@ -3,7 +3,9 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
 from .base import Base
-from sqlalchemy.dialects.postgresql import ENUM
+from sqlalchemy import Enum
+
+from definitions import DockType
 
 
 class DockConfig(Base):
@@ -25,7 +27,7 @@ class Dock(Base):
     config_id = Column(Integer, ForeignKey("dock_configs.id"), nullable=False)
 
     dock_id = Column(String, nullable=False)
-    dock_type = Column(ENUM("pickup", "receiver", "waiting_zone", name="dock_type_enum"), nullable=False)
+    dock_type = Column(Enum(DockType, name="dock_type_enum"), nullable=False)
 
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
