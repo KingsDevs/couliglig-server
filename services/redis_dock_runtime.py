@@ -29,6 +29,7 @@ def clear_all_dock_keys(r: redis.Redis) -> None:
     cursor = 0
     while True:
         cursor, keys = r.scan(cursor=cursor, match="dock:*", count=500)
+        r.set("active_dock_config", "none")
         if keys:
             r.delete(*keys)
 
@@ -52,6 +53,8 @@ def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> Non
 
     # dock_config = session.query(DockConfig).filter_by(id=dock_config_id).first()
     docks = session.query(Dock).filter_by(dock_config_id=dock_config_id).all()
+
+    r.set("active_dock_config", dock_config_id)
 
     for d in docks:
 
