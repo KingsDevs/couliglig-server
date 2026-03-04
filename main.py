@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes import register_router
+from routes import register_router, docks_router
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from services import get_db_session
@@ -16,6 +16,7 @@ HOSTS_FILE = os.getenv("HOSTS_FILE", "/data/robots.hosts")
 app = FastAPI()
 
 app.include_router(register_router)
+app.include_router(docks_router)
 
 def read_hosts_lines() -> list[str]:
     try:

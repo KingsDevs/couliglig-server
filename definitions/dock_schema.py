@@ -46,3 +46,4 @@ class DockOut(BaseModel):
 
     class Config:
         from_attributes = True
+

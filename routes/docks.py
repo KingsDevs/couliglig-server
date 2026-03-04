@@ -3,11 +3,13 @@ from sqlalchemy.orm import Session
 
 from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
-from definitions import DockConfigCreate, DockConfigOut
-from .redis_runtime import redis_client_from_env, clear_all_dock_keys, init_runtime_for_docks
+from definitions import DockConfigCreate, DockConfigOut, DockOut, DockUpdate
+from definitions.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
+from services import redis_client_from_env, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state
 
-router = APIRouter(prefix="/dock-configs", tags=["dock-configs"])
+router = APIRouter(prefix="/dock", tags=["dock"])
 
+redis_client = redis_client_from_env()
 
 @router.post("", response_model=DockConfigOut)
 def create_config(payload: DockConfigCreate, db: Session = Depends(get_db_session)):
@@ -15,17 +17,35 @@ def create_config(payload: DockConfigCreate, db: Session = Depends(get_db_sessio
     if exists:
         raise HTTPException(status_code=409, detail="Config name already exists")
 
-    cfg = DockConfig(name=payload.name, description=payload.description, is_active=0)
+    cfg = DockConfig(name=payload.name, description=payload.description)
     db.add(cfg)
     db.commit()
     db.refresh(cfg)
     return cfg
 
 
-@router.get("", response_model=list[DockConfigOut])
+@router.get("/configs", response_model=list[DockConfigOut])
 def list_configs(db: Session = Depends(get_db_session)):
-    return db.query(DockConfig).order_by(DockConfig.id.desc()).all()
+    return db.query(DockConfig).all()
 
+@router.get("", response_model=list[DockOut])
+def list_docks(db: Session = Depends(get_db_session)):
+    return db.query(Dock).all()
+
+@router.put("/{dock_id}", response_model=DockOut)
+def update_dock(dock_id: int, payload: DockUpdate, db: Session = Depends(get_db_session)):
+    dock = db.query(Dock).filter(Dock.id == dock_id).first()
+    if not dock:
+        raise HTTPException(status_code=404, detail="Dock not found")
+
+    dock.dock_type = payload.dock_type or dock.dock_type
+    dock.x = payload.x if payload.x is not None else dock.x
+    dock.y = payload.y if payload.y is not None else dock.y
+    dock.theta = payload.theta if payload.theta is not None else dock.theta
+
+    db.commit()
+    db.refresh(dock)
+    return dock
 
 @router.delete("/{config_id}")
 def delete_config(config_id: int, db: Session = Depends(get_db_session)):
@@ -33,42 +53,111 @@ def delete_config(config_id: int, db: Session = Depends(get_db_session)):
     if not cfg:
         raise HTTPException(status_code=404, detail="Config not found")
 
-    # if deleting active config, you may want to clear redis too
-    was_active = int(cfg.is_active) == 1
-
     db.delete(cfg)
     db.commit()
-
-    if was_active:
-        r = redis_client_from_env()
-        clear_all_dock_keys(r)
 
     return {"success": True}
 
 
-@router.post("/{config_id}/activate")
+@router.post("/activate")
 def activate_config(config_id: int, db: Session = Depends(get_db_session)):
     cfg = db.query(DockConfig).filter(DockConfig.id == config_id).first()
     if not cfg:
         raise HTTPException(status_code=404, detail="Config not found")
 
-    # 1) Make single active
-    db.query(DockConfig).update({DockConfig.is_active: 0})
-    db.commit()
+    activate_docks(redis_client, db, config_id)
 
-    # 2) Reset redis runtime for active config
-    r = redis_client_from_env()
-    clear_all_dock_keys(r)
+    return {"success": True, "active_config_id": cfg.id}
 
-    docks = db.query(Dock).filter(Dock.config_id == cfg.id).all()
-    init_runtime_for_docks(r, docks)
+@router.post("/add-item")
+def add_item(request: AddItemRequest):
 
-    return {"success": True, "active_config_id": cfg.id, "dock_count": len(docks)}
+    success = add_item_to_pickup_dock(
+        redis_client,
+        request.dock_id,
+        request.item_id,
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="Dock does not exist or already has an item",
+        )
+
+    return {"status": "ok"}
 
 
-@router.get("/active", response_model=DockConfigOut)
-def get_active_config(db: Session = Depends(get_db_session)):
-    cfg = db.query(DockConfig).filter(DockConfig.is_active == 1).first()
-    if not cfg:
-        raise HTTPException(status_code=404, detail="No active config")
-    return cfg
+@router.post("/remove-item")
+def remove_item(request: RemoveItemRequest):
+
+    success = remove_item_from_pickup_dock(
+        redis_client,
+        request.dock_id,
+        request.item_id,
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="Item mismatch or dock empty",
+        )
+
+    return {"status": "ok"}
+
+
+@router.post("/reserve")
+def reserve(request: ReserveDockRequest):
+
+    success = reserve_dock(
+        redis_client,
+        request.dock_type,
+        request.dock_id,
+        request.robot_id,
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=409,
+            detail="Dock already reserved",
+        )
+
+    return {"status": "ok"}
+
+
+@router.post("/occupy")
+def occupy(request: OccupyDockRequest):
+
+    occupy_dock(
+        redis_client,
+        request.dock_type,
+        request.dock_id,
+        request.robot_id,
+    )
+
+    return {"status": "ok"}
+
+
+@router.post("/release")
+def release(request: ReleaseDockRequest):
+
+    release_dock(
+        redis_client,
+        request.dock_type,
+        request.dock_id,
+    )
+
+    return {"status": "ok"}
+
+@router.get("/{dock_type}/{dock_id}")
+def dock_state(dock_type: str, dock_id: str):
+
+    state = get_dock_state(redis_client, dock_type, dock_id)
+
+    if not state:
+        raise HTTPException(
+            status_code=404,
+            detail="Dock not found",
+        )
+
+    return state
+
