@@ -6,9 +6,9 @@ import os
 
 load_dotenv()
 
+os.makedirs("./db", exist_ok=True)
 
-sqlite_path = os.getenv("SQLITE_DB_PATH", "./sqlite.db")
-
+sqlite_path =  "./db/sqlite.db"
 database_url = f"sqlite:///{sqlite_path}"
 
 
