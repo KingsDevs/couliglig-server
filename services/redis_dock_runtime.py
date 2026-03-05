@@ -2,6 +2,7 @@ import time
 import redis
 from schema import Dock
 from sqlalchemy.orm import Session
+from definitions import DockType
 
 
 def redis_client_from_env() -> redis.Redis:
@@ -13,13 +14,12 @@ def redis_client_from_env() -> redis.Redis:
     return redis.Redis(host=host, port=port, db=db, decode_responses=True)
 
 
-def _dock_key(dock_type: str, dock_id: str) -> str:
-    return f"dock:{dock_type}:{dock_id}"
+def _dock_key(dock_type: DockType, dock_id: str) -> str:
+    return f"dock:{dock_type.value}:{dock_id}"
 
 
-def _dock_lock_key(dock_type: str, dock_id: str) -> str:
-    return f"lock:dock:{dock_type}:{dock_id}"
-
+def _dock_lock_key(dock_type: DockType, dock_id: str) -> str:
+    return f"lock:dock:{dock_type.value}:{dock_id}"
 
 # ---------------------------------------------------------
 # Clear runtime
@@ -141,7 +141,7 @@ def remove_item_from_pickup_dock(
 
 def reserve_dock(
     r: redis.Redis,
-    dock_type: str,
+    dock_type: DockType,
     dock_id: str,
     robot_id: str
 ) -> bool:
@@ -174,7 +174,7 @@ def reserve_dock(
 
 def occupy_dock(
     r: redis.Redis,
-    dock_type: str,
+    dock_type: DockType,
     dock_id: str,
     robot_id: str,
 ):
@@ -197,7 +197,7 @@ def occupy_dock(
 
 def release_dock(
     r: redis.Redis,
-    dock_type: str,
+    dock_type: DockType,
     dock_id: str,
 ):
 
@@ -222,7 +222,7 @@ def release_dock(
 
 def get_dock_state(
     r: redis.Redis,
-    dock_type: str,
+    dock_type: DockType,
     dock_id: str
 ):
 
