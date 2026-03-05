@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
-from .dock_types import DockType
+from definitions import DockType
 
 
 class DockConfigCreate(BaseModel):

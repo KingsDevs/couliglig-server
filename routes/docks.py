@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
-from definitions import DockConfigCreate, DockConfigOut, DockOut, DockUpdate
-from definitions.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
+from models.dock_schema import DockConfigCreate, DockConfigOut, DockOut, DockUpdate
+from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
 from services import redis_client_from_env, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state
 
 router = APIRouter(prefix="/dock", tags=["dock"])
@@ -160,4 +160,11 @@ def dock_state(dock_type: str, dock_id: str):
         )
 
     return state
+
+@router.post("/clear")
+def clear_docks():
+
+    clear_all_dock_keys(redis_client)
+
+    return {"status": "ok"}
 
