@@ -229,3 +229,35 @@ def get_dock_state(
     key = _dock_key(dock_type, dock_id)
 
     return r.hgetall(key)
+
+# create function that will dock states for all activate docks
+def get_all_dock_states(
+    r: redis.Redis,
+):
+
+    active_config = r.get("active_dock_config")
+
+    if not active_config or active_config == "none":
+        return []
+
+    cursor = 0
+    dock_states = []
+    while True:
+        cursor, keys = r.scan(cursor=cursor, match=f"dock:*", count=500)
+
+        for key in keys:
+            data = r.hgetall(key)
+            if data:
+                dock_states.append({
+                    "dock_type": key.split(":")[1],
+                    "dock_id": key.split(":")[2],
+                    "status": data.get("status"),
+                    "robot_id": data.get("robot_id"),
+                    "item_id": data.get("item_id"),
+                    "ts": data.get("ts"),
+                })
+
+        if cursor == 0:
+            break
+
+    return dock_states

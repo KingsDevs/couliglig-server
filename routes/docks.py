@@ -5,7 +5,7 @@ from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
 from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
-from services import redis_client_from_env, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state
+from services.redis_dock_runtime import redis_client_from_env, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state, get_all_dock_states
 
 router = APIRouter(prefix="/dock", tags=["dock"])
 
@@ -238,6 +238,12 @@ def dock_state(dock_type: str, dock_id: str):
         )
 
     return state
+
+@router.get("/all_dock_states")
+def all_dock_states():
+    states = get_all_dock_states(redis_client)
+
+    return states
 
 @router.post("/clear")
 def clear_docks():
