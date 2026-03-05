@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
-from models.dock_schema import DockConfigCreate, DockConfigOut, DockOut, DockUpdate, DockCreate
+from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
 from services import redis_client_from_env, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state
 
@@ -73,6 +73,19 @@ def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)
 
     return docks
 
+@router.put("/update_config", response_model=DockConfigOut)
+def update_config(config_id: int, payload: DockConfigUpdate, db: Session = Depends(get_db_session)):
+    cfg = db.query(DockConfig).filter(DockConfig.id == config_id).first()
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Config not found")
+
+    cfg.name = payload.name or cfg.name
+    cfg.description = payload.description or cfg.description
+
+    db.commit()
+    db.refresh(cfg)
+    return cfg
+
 @router.put("/update_dock", response_model=DockOut)
 def update_dock(dock_db_id: int, payload: DockUpdate, db: Session = Depends(get_db_session)):
     dock = db.query(Dock).filter(Dock.id == dock_db_id).first()
@@ -113,6 +126,16 @@ def delete_config(config_id: int, db: Session = Depends(get_db_session)):
 
     return {"success": True}
 
+@router.delete("/delete_dock")
+def delete_dock(dock_db_id: int, db: Session = Depends(get_db_session)):
+    dock = db.query(Dock).filter(Dock.id == dock_db_id).first()
+    if not dock:
+        raise HTTPException(status_code=404, detail="Dock not found")
+
+    db.delete(dock)
+    db.commit()
+
+    return {"success": True}
 
 @router.post("/activate")
 def activate_config(config_id: int, db: Session = Depends(get_db_session)):

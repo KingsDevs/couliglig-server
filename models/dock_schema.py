@@ -7,6 +7,9 @@ class DockConfigCreate(BaseModel):
     name: str = Field(min_length=1)
     description: Optional[str] = None
 
+class DockConfigUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
 
 class DockConfigOut(BaseModel):
     id: int
