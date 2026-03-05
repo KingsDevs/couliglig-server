@@ -231,7 +231,10 @@
     </div>
 
     <script>
-      const API = "http://127.0.0.1:8000";
+    //   const API = "http://127.0.0.1:8000";
+
+    // get base URL dynamically
+        const API = `${window.location.protocol}//${window.location.host}`;
 
       function show(data) {
         document.getElementById("output").textContent = JSON.stringify(
