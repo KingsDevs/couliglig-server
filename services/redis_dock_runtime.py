@@ -83,7 +83,7 @@ def add_item_to_pickup_dock(
     item_id: str
 ) -> bool:
 
-    key = _dock_key("pickup", dock_id)
+    key = _dock_key(DockType.PICKUP, dock_id)
 
     data = r.hgetall(key)
 
