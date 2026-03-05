@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from services.database import get_db_session  # adjust
@@ -252,3 +253,8 @@ def clear_docks():
 
     return {"status": "ok"}
 
+@router.get("/test/ui", response_class=HTMLResponse)
+async def get_dock_form():
+    with open("static/dock_test.html") as f:
+        content = f.read()
+    return HTMLResponse(content=content)

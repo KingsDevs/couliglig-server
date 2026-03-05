@@ -3,6 +3,7 @@ from routes import register_router, docks_router
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from services import get_db_session
+from fastapi.staticfiles import StaticFiles
 import html
 import os
 
@@ -17,6 +18,7 @@ app = FastAPI()
 
 app.include_router(register_router)
 app.include_router(docks_router)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 def read_hosts_lines() -> list[str]:
     try:

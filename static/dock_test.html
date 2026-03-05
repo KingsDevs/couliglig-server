@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dock Runtime Test</title>
+
+    <link rel="stylesheet" href="/static/css/bootstrap.min.css">
+    <script src="/static/js/popper.min.js"></script>
+    <script src="/static/js/bootstrap.min.js"></script>
+
+    <style>
+      body {
+        background: #f5f5f5;
+      }
+
+      .card {
+        margin-bottom: 20px;
+      }
+
+      pre {
+        background: #111;
+        color: #0f0;
+        padding: 15px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container py-4">
+      <h2 class="mb-4">🚧 Couliglig Dock Runtime Test</h2>
+
+      <div class="row">
+        <!-- ACTIVATE CONFIG -->
+        <div class="col-md-4">
+          <div class="card">
+            <div class="card-header">Activate Dock Config</div>
+            <div class="card-body">
+              <input
+                id="activate_config"
+                class="form-control mb-2"
+                placeholder="Config ID"
+              />
+
+              <button class="btn btn-success w-100" onclick="activateConfig()">
+                Activate
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RESERVE -->
+        <div class="col-md-4">
+          <div class="card">
+            <div class="card-header">Reserve Dock</div>
+            <div class="card-body">
+              <input
+                id="reserve_robot"
+                class="form-control mb-2"
+                placeholder="Robot ID"
+              />
+
+              <input
+                id="reserve_type"
+                class="form-control mb-2"
+                placeholder="Dock Type"
+              />
+
+              <input
+                id="reserve_id"
+                class="form-control mb-2"
+                placeholder="Dock ID"
+              />
+
+              <button class="btn btn-primary w-100" onclick="reserveDock()">
+                Reserve
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- OCCUPY -->
+        <div class="col-md-4">
+          <div class="card">
+            <div class="card-header">Occupy Dock</div>
+            <div class="card-body">
+              <input
+                id="occupy_robot"
+                class="form-control mb-2"
+                placeholder="Robot ID"
+              />
+
+              <input
+                id="occupy_type"
+                class="form-control mb-2"
+                placeholder="Dock Type"
+              />
+
+              <input
+                id="occupy_id"
+                class="form-control mb-2"
+                placeholder="Dock ID"
+              />
+
+              <button class="btn btn-warning w-100" onclick="occupyDock()">
+                Occupy
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <!-- RELEASE -->
+        <div class="col-md-4">
+          <div class="card">
+            <div class="card-header">Release Dock</div>
+            <div class="card-body">
+              <input
+                id="release_type"
+                class="form-control mb-2"
+                placeholder="Dock Type"
+              />
+
+              <input
+                id="release_id"
+                class="form-control mb-2"
+                placeholder="Dock ID"
+              />
+
+              <button class="btn btn-danger w-100" onclick="releaseDock()">
+                Release
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ADD ITEM -->
+        <div class="col-md-4">
+          <div class="card">
+            <div class="card-header">Add Item</div>
+            <div class="card-body">
+              <input
+                id="add_item_dock"
+                class="form-control mb-2"
+                placeholder="Dock ID"
+              />
+
+              <input
+                id="add_item_id"
+                class="form-control mb-2"
+                placeholder="Item ID"
+              />
+
+              <button class="btn btn-success w-100" onclick="addItem()">
+                Add Item
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- REMOVE ITEM -->
+        <div class="col-md-4">
+          <div class="card">
+            <div class="card-header">Remove Item</div>
+            <div class="card-body">
+              <input
+                id="remove_item_dock"
+                class="form-control mb-2"
+                placeholder="Dock ID"
+              />
+
+              <input
+                id="remove_item_id"
+                class="form-control mb-2"
+                placeholder="Item ID"
+              />
+
+              <button class="btn btn-secondary w-100" onclick="removeItem()">
+                Remove Item
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <!-- DOCK STATE -->
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header">Get Dock State</div>
+            <div class="card-body">
+              <input
+                id="state_type"
+                class="form-control mb-2"
+                placeholder="Dock Type"
+              />
+
+              <input
+                id="state_id"
+                class="form-control mb-2"
+                placeholder="Dock ID"
+              />
+
+              <button class="btn btn-info w-100" onclick="dockState()">
+                Get State
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ALL STATES -->
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header">All Dock States</div>
+            <div class="card-body">
+              <button class="btn btn-dark w-100" onclick="allStates()">
+                Get All
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">Response</div>
+
+        <div class="card-body">
+          <pre id="output"></pre>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API = "http://127.0.0.1:8000";
+
+      function show(data) {
+        document.getElementById("output").textContent = JSON.stringify(
+          data,
+          null,
+          2
+        );
+      }
+
+      async function post(endpoint, data) {
+        const res = await fetch(API + endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(data),
+        });
+
+        const text = await res.text();
+
+        try {
+          show(JSON.parse(text));
+        } catch {
+          show(text);
+        }
+      }
+
+      async function get(endpoint) {
+        const res = await fetch(API + endpoint);
+
+        const data = await res.json();
+
+        show(data);
+      }
+
+      function activateConfig() {
+        const configId = document.getElementById("activate_config").value;
+
+        post(`/dock/activate?config_id=${configId}`, {});
+      }
+
+      function reserveDock() {
+        post("/dock/reserve", {
+          robot_id: document.getElementById("reserve_robot").value,
+          dock_type: document.getElementById("reserve_type").value,
+          dock_id: document.getElementById("reserve_id").value,
+        });
+      }
+
+      function occupyDock() {
+        post("/dock/occupy", {
+          robot_id: document.getElementById("occupy_robot").value,
+          dock_type: document.getElementById("occupy_type").value,
+          dock_id: document.getElementById("occupy_id").value,
+        });
+      }
+
+      function releaseDock() {
+        post("/dock/release", {
+          dock_type: document.getElementById("release_type").value,
+          dock_id: document.getElementById("release_id").value,
+        });
+      }
+
+      function addItem() {
+        post("/dock/add-item", {
+          dock_id: document.getElementById("add_item_dock").value,
+          item_id: document.getElementById("add_item_id").value,
+        });
+      }
+
+      function removeItem() {
+        post("/dock/remove-item", {
+          dock_id: document.getElementById("remove_item_dock").value,
+          item_id: document.getElementById("remove_item_id").value,
+        });
+      }
+
+      function dockState() {
+        const type = document.getElementById("state_type").value;
+        const id = document.getElementById("state_id").value;
+
+        get(`/dock/dock_state?dock_type=${type}&dock_id=${id}`);
+      }
+
+      function allStates() {
+        get("/dock/all_dock_states");
+      }
+    </script>
+  </body>
+</html>
