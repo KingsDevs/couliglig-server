@@ -21,6 +21,7 @@ services:
     volumes:
       # dnsmasq-managed hosts file (host → container)
       - /var/lib/dnsmasq/robots.hosts:/data/robots.hosts
+      - ./db:/app/db
     environment:
       - HOSTS_FILE=/data/robots.hosts
     ports:
