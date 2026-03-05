@@ -52,7 +52,7 @@ def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> Non
     now = int(time.time())
 
     # dock_config = session.query(DockConfig).filter_by(id=dock_config_id).first()
-    docks = session.query(Dock).filter_by(dock_config_id=dock_config_id).all()
+    docks = session.query(Dock).filter_by(config_id=dock_config_id).all()
 
     r.set("active_dock_config", dock_config_id)
 
