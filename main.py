@@ -1,6 +1,6 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from routes import register_router, docks_router
-from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from services import get_db_session
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +15,14 @@ HOSTS_FILE = os.getenv("HOSTS_FILE", "/data/robots.hosts")
 # HOSTS_FILE = "/home/karlshane/couliglig-server/temp.hosts"
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(register_router)
 app.include_router(docks_router)
