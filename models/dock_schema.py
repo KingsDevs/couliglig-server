@@ -31,9 +31,6 @@ class DockUpdate(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     theta: Optional[float] = None
-    frame_id: Optional[str] = None
-    enabled: Optional[int] = None
-
 
 class DockOut(BaseModel):
     id: int
