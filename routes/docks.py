@@ -178,7 +178,7 @@ def release(request: ReleaseDockRequest):
 
     return {"status": "ok"}
 
-@router.get("/{dock_type}/{dock_id}")
+@router.get("/dock_state")
 def dock_state(dock_type: str, dock_id: str):
 
     state = get_dock_state(redis_client, dock_type, dock_id)
