@@ -34,16 +34,15 @@ def list_docks(config_id: int, db: Session = Depends(get_db_session)):
 
 @router.post("/create_dock", response_model=list[DockOut])
 def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)):
-
     docks = []
     for p in payload:
         cfg = db.query(DockConfig).filter(DockConfig.id == p.config_id).first()
         if not cfg:
             raise HTTPException(status_code=404, detail="Config not found")
 
-        exists = db.query(Dock).filter(Dock.dock_id == p.dock_id).first()
+        exists = db.query(Dock).filter(Dock.dock_id == p.dock_id, Dock.config_id == p.config_id).first()
         if exists:
-            raise HTTPException(status_code=409, detail="Dock ID already exists")
+            raise HTTPException(status_code=409, detail="Dock ID already exists in the specified config")
 
         dock = Dock(
             config_id=p.config_id,
