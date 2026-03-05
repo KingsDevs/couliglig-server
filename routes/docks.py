@@ -34,15 +34,25 @@ def list_docks(config_id: int, db: Session = Depends(get_db_session)):
 
 @router.post("/create_dock", response_model=list[DockOut])
 def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)):
+
     docks = []
+
     for p in payload:
+
         cfg = db.query(DockConfig).filter(DockConfig.id == p.config_id).first()
         if not cfg:
             raise HTTPException(status_code=404, detail="Config not found")
 
-        exists = db.query(Dock).filter(Dock.dock_id == p.dock_id, Dock.config_id == p.config_id).first()
+        exists = db.query(Dock).filter(
+            Dock.dock_id == p.dock_id,
+            Dock.config_id == p.config_id
+        ).first()
+
         if exists:
-            raise HTTPException(status_code=409, detail="Dock ID already exists in the specified config")
+            raise HTTPException(
+                status_code=409,
+                detail="Dock ID already exists in the specified config"
+            )
 
         dock = Dock(
             config_id=p.config_id,
@@ -54,10 +64,12 @@ def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)
         )
 
         db.add(dock)
-        db.commit()
-        db.refresh(dock)
-
         docks.append(dock)
+
+    db.commit()
+
+    for dock in docks:
+        db.refresh(dock)
 
     return docks
 
@@ -68,10 +80,18 @@ def update_dock(dock_db_id: int, payload: DockUpdate, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="Dock not found")
 
     if payload.dock_id:
-        exists = db.query(Dock).filter(Dock.dock_id == payload.dock_id, Dock.id == dock_db_id).first()
-        if exists:
-            raise HTTPException(status_code=409, detail="Dock ID already exists in the same config")
+        exists = db.query(Dock).filter(
+            Dock.dock_id == payload.dock_id,
+            Dock.config_id == dock.config_id,
+            Dock.id != dock_db_id
+        ).first()
 
+        if exists:
+            raise HTTPException(
+                status_code=409,
+                detail="Dock ID already exists in this config"
+            )
+        
     dock.dock_id = payload.dock_id or dock.dock_id
     dock.dock_type = payload.dock_type or dock.dock_type
     dock.x = payload.x if payload.x is not None else dock.x
