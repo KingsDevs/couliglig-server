@@ -27,6 +27,7 @@ class DockCreate(BaseModel):
 
 
 class DockUpdate(BaseModel):
+    dock_id: Optional[str] = None
     dock_type: Optional[DockType] = None
     x: Optional[float] = None
     y: Optional[float] = None

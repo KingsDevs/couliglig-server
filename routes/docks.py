@@ -63,8 +63,8 @@ def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)
     return docks
 
 @router.put("/update_dock", response_model=DockOut)
-def update_dock(dock_id: int, payload: DockUpdate, db: Session = Depends(get_db_session)):
-    dock = db.query(Dock).filter(Dock.id == dock_id).first()
+def update_dock(dock_db_id: int, payload: DockUpdate, db: Session = Depends(get_db_session)):
+    dock = db.query(Dock).filter(Dock.id == dock_db_id).first()
     if not dock:
         raise HTTPException(status_code=404, detail="Dock not found")
 
