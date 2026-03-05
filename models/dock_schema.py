@@ -24,6 +24,7 @@ class DockCreate(BaseModel):
     config_id: int
     dock_id: str = Field(min_length=1)
     dock_type: DockType
+    aruco_id: int = 1
     x: float = 0.0
     y: float = 0.0
     theta: float = 0.0
@@ -32,6 +33,7 @@ class DockCreate(BaseModel):
 class DockUpdate(BaseModel):
     dock_id: Optional[str] = None
     dock_type: Optional[DockType] = None
+    aruco_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
     theta: Optional[float] = None
@@ -41,6 +43,7 @@ class DockOut(BaseModel):
     config_id: int
     dock_id: str
     dock_type: DockType
+    aruco_id: int
     x: float
     y: float
     theta: float

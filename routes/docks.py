@@ -54,11 +54,23 @@ def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)
                 status_code=409,
                 detail="Dock ID already exists in the specified config"
             )
+        
+        exists_aruco = db.query(Dock).filter(
+            Dock.aruco_id == p.aruco_id,
+            Dock.config_id == p.config_id
+        ).first()
+
+        if exists_aruco:
+            raise HTTPException(
+                status_code=409,
+                detail="Aruco ID already exists in the specified config"
+            )
 
         dock = Dock(
             config_id=p.config_id,
             dock_id=p.dock_id,
             dock_type=p.dock_type,
+            aruco_id=p.aruco_id,
             x=p.x,
             y=p.y,
             theta=p.theta,
@@ -106,8 +118,22 @@ def update_dock(dock_db_id: int, payload: DockUpdate, db: Session = Depends(get_
                 detail="Dock ID already exists in this config"
             )
         
+    if payload.aruco_id is not None:
+        exists_aruco = db.query(Dock).filter(
+            Dock.aruco_id == payload.aruco_id,
+            Dock.config_id == dock.config_id,
+            Dock.id != dock_db_id
+        ).first()
+
+        if exists_aruco:
+            raise HTTPException(
+                status_code=409,
+                detail="Aruco ID already exists in this config"
+            )
+        
     dock.dock_id = payload.dock_id or dock.dock_id
     dock.dock_type = payload.dock_type or dock.dock_type
+    dock.aruco_id = payload.aruco_id if payload.aruco_id is not None else dock.aruco_id
     dock.x = payload.x if payload.x is not None else dock.x
     dock.y = payload.y if payload.y is not None else dock.y
     dock.theta = payload.theta if payload.theta is not None else dock.theta

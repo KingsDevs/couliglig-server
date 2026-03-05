@@ -29,6 +29,7 @@ class Dock(Base):
     dock_id = Column(String, nullable=False)
     dock_type = Column(Enum(DockType, name="dock_type_enum"), nullable=False)
 
+    aruco_id = Column(Integer, nullable=True)
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
     theta = Column(Float, default=0.0, nullable=True)
@@ -37,4 +38,5 @@ class Dock(Base):
 
     __table_args__ = (
         UniqueConstraint("config_id", "dock_id", name="uq_docks_configid_dockid"),
+        UniqueConstraint("config_id", "aruco_id", name="uq_docks_configid_arucoid"),
     )
