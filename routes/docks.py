@@ -68,6 +68,12 @@ def update_dock(dock_db_id: int, payload: DockUpdate, db: Session = Depends(get_
     if not dock:
         raise HTTPException(status_code=404, detail="Dock not found")
 
+    if payload.dock_id:
+        exists = db.query(Dock).filter(Dock.dock_id == payload.dock_id, Dock.id == dock_db_id).first()
+        if exists:
+            raise HTTPException(status_code=409, detail="Dock ID already exists in the same config")
+
+    dock.dock_id = payload.dock_id or dock.dock_id
     dock.dock_type = payload.dock_type or dock.dock_type
     dock.x = payload.x if payload.x is not None else dock.x
     dock.y = payload.y if payload.y is not None else dock.y
