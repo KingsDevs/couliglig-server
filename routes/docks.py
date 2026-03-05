@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
-from models.dock_schema import DockConfigCreate, DockConfigOut, DockOut, DockUpdate
+from models.dock_schema import DockConfigCreate, DockConfigOut, DockOut, DockUpdate, DockCreate
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
 from services import redis_client_from_env, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state
 
@@ -29,10 +29,40 @@ def list_configs(db: Session = Depends(get_db_session)):
     return db.query(DockConfig).all()
 
 @router.get("", response_model=list[DockOut])
-def list_docks(db: Session = Depends(get_db_session)):
-    return db.query(Dock).all()
+def list_docks(config_id: int, db: Session = Depends(get_db_session)):
+    return db.query(Dock).filter(Dock.config_id == config_id).all()
 
-@router.put("/{dock_id}", response_model=DockOut)
+@router.post("/create_dock", response_model=list[DockOut])
+def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)):
+
+    docks = []
+    for p in payload:
+        cfg = db.query(DockConfig).filter(DockConfig.id == p.config_id).first()
+        if not cfg:
+            raise HTTPException(status_code=404, detail="Config not found")
+
+        exists = db.query(Dock).filter(Dock.dock_id == p.dock_id).first()
+        if exists:
+            raise HTTPException(status_code=409, detail="Dock ID already exists")
+
+        dock = Dock(
+            config_id=p.config_id,
+            dock_id=p.dock_id,
+            dock_type=p.dock_type,
+            x=p.x,
+            y=p.y,
+            theta=p.theta,
+        )
+
+        db.add(dock)
+        db.commit()
+        db.refresh(dock)
+
+        docks.append(dock)
+
+    return docks
+
+@router.put("/update_dock", response_model=DockOut)
 def update_dock(dock_id: int, payload: DockUpdate, db: Session = Depends(get_db_session)):
     dock = db.query(Dock).filter(Dock.id == dock_id).first()
     if not dock:
@@ -47,7 +77,7 @@ def update_dock(dock_id: int, payload: DockUpdate, db: Session = Depends(get_db_
     db.refresh(dock)
     return dock
 
-@router.delete("/{config_id}")
+@router.delete("/delete_config")
 def delete_config(config_id: int, db: Session = Depends(get_db_session)):
     cfg = db.query(DockConfig).filter(DockConfig.id == config_id).first()
     if not cfg:
