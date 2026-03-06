@@ -184,28 +184,34 @@ def get_robot_infos(db: Session = Depends(get_db_session)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@register_router.post("/infos", response_model=RobotInfoDef)
-def create_robot_info(info: RobotInfoDef, db: Session = Depends(get_db_session)):
+@register_router.post("/infos", response_model=list[RobotInfoDef])
+def create_robot_info(infos: list[RobotInfoDef], db: Session = Depends(get_db_session)):
     try:
-        map_cfg = db.query(MapConfig).filter(MapConfig.id == info.map_id).first()
-        if not map_cfg:
-            raise HTTPException(status_code=404, detail="Map config not found")
+        created_infos = []
+        for info in infos:
+            map_cfg = db.query(MapConfig).filter(MapConfig.id == info.map_id).first()
+            if not map_cfg:
+                raise HTTPException(status_code=404, detail="Map config not found")
 
-        existing = db.query(RobotInfo).filter(RobotInfo.map_id == info.map_id).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Robot info with this map ID already exists")
+            existing = db.query(RobotInfo).filter(RobotInfo.map_id == info.map_id).first()
+            if existing:
+                raise HTTPException(status_code=409, detail="Robot info with this map ID already exists")
 
-        new_info = RobotInfo(
-            robot_name=info.robot_name,
-            initial_x=info.initial_x,
-            initial_y=info.initial_y,
-            initial_theta=info.initial_theta,
-            map_id=info.map_id
-        )
-        db.add(new_info)
+            new_info = RobotInfo(
+                robot_name=info.robot_name,
+                initial_x=info.initial_x,
+                initial_y=info.initial_y,
+                initial_theta=info.initial_theta,
+                map_id=info.map_id
+            )
+            db.add(new_info)
+            created_infos.append(new_info)
+
         db.commit()
-        db.refresh(new_info)
-        return new_info
+        for info in created_infos:
+            db.refresh(info)
+
+        return created_infos
     except HTTPException:
         raise
     except Exception as e:
