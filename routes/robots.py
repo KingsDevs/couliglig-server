@@ -2,11 +2,15 @@ import json
 import redis
 import os
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
 from models import RobotRegistration, RobotStatus, RobotStatusesResponse, RobotOnline, RobotOnlineResponse
+from models.robot_infos import RobotInfoDef
+from schema import RobotInfo, MapConfig
 from services import register_host
 from dotenv import load_dotenv
 from datetime import datetime
+from services.database import get_db_session
 
 load_dotenv()
 
@@ -168,5 +172,57 @@ def get_online_robots():
 
         return RobotOnlineResponse(data=online_robots)
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@register_router.get("/infos", response_model=list[RobotInfoDef])
+def get_robot_infos(db: Session = Depends(get_db_session)):
+    try:
+        infos = db.query(RobotInfo).all()
+        return infos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@register_router.post("/infos", response_model=RobotInfoDef)
+def create_robot_info(info: RobotInfoDef, db: Session = Depends(get_db_session)):
+    try:
+        map_cfg = db.query(MapConfig).filter(MapConfig.id == info.map_id).first()
+        if not map_cfg:
+            raise HTTPException(status_code=404, detail="Map config not found")
+
+        existing = db.query(RobotInfo).filter(RobotInfo.map_id == info.map_id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Robot info with this map ID already exists")
+
+        new_info = RobotInfo(
+            robot_name=info.robot_name,
+            initial_x=info.initial_x,
+            initial_y=info.initial_y,
+            initial_theta=info.initial_theta,
+            map_id=info.map_id
+        )
+        db.add(new_info)
+        db.commit()
+        db.refresh(new_info)
+        return new_info
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@register_router.delete("/infos")
+def delete_robot_info(map_id: int, db: Session = Depends(get_db_session)):
+    try:
+        existing = db.query(RobotInfo).filter(RobotInfo.map_id == map_id).first()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Robot info with this map ID not found")
+
+        db.delete(existing)
+        db.commit()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
