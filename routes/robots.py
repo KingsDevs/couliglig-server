@@ -164,7 +164,7 @@ def get_online_robots():
                 RobotOnline(
                     hostname=payload.get("hostname", hostname),
                     ip=payload.get("ip"),
-                    namespace=payload.get("namespace", "couliglig"),
+                    namespace=f"couliglig_bot_{payload.get('ros_domain_id', 0)}",
                     ros_domain_id=payload.get("ros_domain_id", 0),
                     timestamp=payload.get("timestamp", "")
                 )
