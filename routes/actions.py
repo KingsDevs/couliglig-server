@@ -48,6 +48,57 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
             "success": False,
             "error": str(e)
         }
+    
+async def call_robot_nav_stop(robot_ip, robot_name):
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+
+            response = await client.post(
+                f"http://{robot_ip}:8000/roslib/nav",
+                data={
+                    "command": "stop",
+                    "enable_commander": True,
+                    "x_val": 0.0,
+                    "y_val": 0.0
+                }
+            )
+
+        return {
+            "robot": robot_name,
+            "success": response.status_code == 200,
+            "response": response.json() if response.status_code == 200 else None
+        }
+
+    except Exception as e:
+        return {
+            "robot": robot_name,
+            "success": False,
+            "error": str(e)
+        }
+    
+@router.post("/stop_nav")
+async def stop_navigation(request: NavigationActionRequest):
+
+    tasks = []
+
+    for robot_data in request.robot_data:
+        tasks.append(
+            call_robot_nav_stop(
+                robot_data.robot_ip,
+                robot_data.namespace
+            )
+        )
+
+    results = await asyncio.gather(*tasks)
+
+    successful = [r for r in results if r["success"]]
+    failed = [r for r in results if not r["success"]]
+
+    return {
+        "total": len(results),
+        "successful": successful,
+        "failed": failed
+    }
 
 
 @router.post("/run_nav")
@@ -89,3 +140,4 @@ async def run_navigation(request: NavigationActionRequest, db: Session = Depends
         "successful": successful,
         "failed": failed
     }
+
