@@ -28,7 +28,7 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
             }
 
             response = await client.post(
-                f"http://{robot_ip}:8000/nav",
+                f"http://{robot_ip}:8000/roslib/nav",
                 data=data,
                 files=files
             )
