@@ -15,7 +15,7 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
         async with httpx.AsyncClient(timeout=20.0) as client:
 
             with open(f"db/maps/{map.map_yaml_path}", "rb") as map_yaml, \
-                open(f"db/maps/{map.map_image_path}", "rb") as map_pgm:
+                 open(f"db/maps/{map.map_image_path}", "rb") as map_pgm:
 
                 files = {
                     "map_yaml": map_yaml,
@@ -23,24 +23,24 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
                     "dock_database": ("dock.yaml", dock_buffer, "application/x-yaml"),
                 }
 
-            data = {
-                "command": "start",
-                "enable_commander": True,
-                "x_val": robot_info.initial_x,
-                "y_val": robot_info.initial_y,
-            }
+                data = {
+                    "command": "start",
+                    "enable_commander": True,
+                    "x_val": robot_info.initial_x,
+                    "y_val": robot_info.initial_y,
+                }
 
-            response = await client.post(
-                f"http://{robot_ip}:8000/roslib/nav",
-                data=data,
-                files=files
-            )
+                response = await client.post(
+                    f"http://{robot_ip}:8000/roslib/nav",
+                    data=data,
+                    files=files
+                )
 
-            return {
-                "robot": robot_name,
-                "success": response.status_code == 200,
-                "response": response.json() if response.status_code == 200 else None
-            }
+        return {
+            "robot": robot_name,
+            "success": response.status_code == 200,
+            "response": response.json() if response.status_code == 200 else None
+        }
 
     except Exception as e:
         return {
@@ -79,7 +79,7 @@ async def run_navigation(request: NavigationActionRequest, db: Session = Depends
 
         tasks.append(call_robot_nav(robot_data.robot_ip, robot_data.namespace, robot_info, map, dock_buffer))
 
-    results = asyncio.run(asyncio.gather(*tasks))
+    results = await asyncio.gather(*tasks)
 
     successful = [r for r in results if r["success"]]
     failed = [r for r in results if not r["success"]]
