@@ -14,11 +14,14 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
 
-            files = {
-                "map_yaml": open(f"db/maps/{map.map_yaml_path}", "rb"),
-                "map_pgm": open(f"db/maps/{map.map_image_path}", "rb"),
-                "dock_database": ("dock.yaml", dock_buffer, "application/x-yaml"),
-            }
+            with open(f"db/maps/{map.map_yaml_path}", "rb") as map_yaml, \
+                open(f"db/maps/{map.map_image_path}", "rb") as map_pgm:
+
+                files = {
+                    "map_yaml": map_yaml,
+                    "map_pgm": map_pgm,
+                    "dock_database": ("dock.yaml", dock_buffer, "application/x-yaml"),
+                }
 
             data = {
                 "command": "start",
@@ -48,7 +51,7 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
 
 
 @router.post("/run_nav")
-def run_navigation(request: NavigationActionRequest, db: Session = Depends(get_db_session)):
+async def run_navigation(request: NavigationActionRequest, db: Session = Depends(get_db_session)):
     dock_config = db.query(DockConfig).filter(DockConfig.id == request.config_id).first()
     if not dock_config:
         raise HTTPException(status_code=404, detail="Dock configuration not found")
