@@ -2,7 +2,7 @@ import math
 import yaml
 from schema import Dock
 from typing import List
-
+import io
 
 def flip_theta(theta: float) -> float:
     angle = theta + math.pi
@@ -68,11 +68,15 @@ def generate_dock_yaml(docks: List[Dock], output_path: str):
             },
         }
 
-    with open(output_path, "w") as f:
-        yaml.dump(
-            yaml_data,
-            f,
-            Dumper=InlineListDumper,
-            sort_keys=False,
-            default_flow_style=False,
-        )
+    buffer = io.StringIO()
+
+    yaml.dump(
+        yaml_data,
+        buffer,
+        Dumper=InlineListDumper,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+    buffer.seek(0)
+    return buffer

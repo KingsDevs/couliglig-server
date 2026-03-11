@@ -9,7 +9,7 @@ class RobotInfo(Base):
     __tablename__ = "robot_info"
 
     id = Column(Integer, primary_key=True)
-    robot_name = Column(String, unique=True, nullable=False)
+    robot_name = Column(String, nullable=False)
     initial_x = Column(Float, nullable=False)
     initial_y = Column(Float, nullable=False)
     initial_theta = Column(Float, default=0.0, nullable=False) # radians

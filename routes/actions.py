@@ -5,8 +5,47 @@ from services.database import get_db_session
 from services.generate_dock_yaml import generate_dock_yaml
 from models.actions import NavigationActionRequest
 from schema import DockConfig, Dock, RobotInfo, MapConfig
+import asyncio
+import httpx
 
 router = APIRouter(prefix="/actions", tags=["actions"])
+
+async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapConfig, dock_buffer):
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+
+            files = {
+                "map_yaml": open(f"db/maps/{map.map_yaml_path}", "rb"),
+                "map_pgm": open(f"db/maps/{map.map_image_path}", "rb"),
+                "dock_database": ("dock.yaml", dock_buffer, "application/x-yaml"),
+            }
+
+            data = {
+                "command": "start",
+                "enable_commander": True,
+                "x_val": robot_info.initial_x,
+                "y_val": robot_info.initial_y,
+            }
+
+            response = await client.post(
+                f"http://{robot_ip}:8000/nav",
+                data=data,
+                files=files
+            )
+
+            return {
+                "robot": robot_name,
+                "success": response.status_code == 200,
+                "response": response.json() if response.status_code == 200 else None
+            }
+
+    except Exception as e:
+        return {
+            "robot": robot_name,
+            "success": False,
+            "error": str(e)
+        }
+
 
 @router.post("/run_nav")
 def run_navigation(request: NavigationActionRequest, db: Session = Depends(get_db_session)):
@@ -18,6 +57,31 @@ def run_navigation(request: NavigationActionRequest, db: Session = Depends(get_d
     if not docks:
         raise HTTPException(status_code=404, detail="No docks found for the specified configuration")
     
-    generate_dock_yaml(docks, f"dock_database_{request.config_id}.yaml")
+    map = db.query(MapConfig).filter(MapConfig.dock_config_id == request.config_id).one()
+    if not map:
+        raise HTTPException(status_code=404, detail="No map found for the specified dock configuration")
+    
+    robot_infos = db.query(RobotInfo).filter(RobotInfo.map_id == map.id).all()
+    if not robot_infos:
+        raise HTTPException(status_code=404, detail="No robot info found for the specified map")
+    
+    robot_info_dict = {info.robot_name: info for info in robot_infos}
+    dock_buffer = generate_dock_yaml(docks, f"dock_database_{request.config_id}.yaml")
 
-    return {"message": "Navigation action triggered"}
+    tasks = []
+    for robot_data in request.robot_data:
+        robot_info = robot_info_dict.get(robot_data.robot_name)
+        if not robot_info:
+            continue
+        tasks.append(call_robot_nav(robot_data.robot_ip, robot_data.robot_name, robot_info, map, dock_buffer))
+
+    results = asyncio.run(asyncio.gather(*tasks))
+
+    successful = [r for r in results if r["success"]]
+    failed = [r for r in results if not r["success"]]
+
+    return {
+        "total": len(results),
+        "successful": successful,
+        "failed": failed
+    }

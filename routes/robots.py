@@ -193,9 +193,9 @@ def create_robot_info(infos: list[RobotInfoDef], db: Session = Depends(get_db_se
             if not map_cfg:
                 raise HTTPException(status_code=404, detail="Map config not found")
 
-            existing = db.query(RobotInfo).filter(RobotInfo.map_id == info.map_id).first()
+            existing = db.query(RobotInfo).filter(RobotInfo.map_id == info.map_id, RobotInfo.robot_name == info.robot_name).first()
             if existing:
-                raise HTTPException(status_code=409, detail="Robot info with this map ID already exists")
+                raise HTTPException(status_code=409, detail="Robot info with this map ID and name already exists")
 
             new_info = RobotInfo(
                 robot_name=info.robot_name,
