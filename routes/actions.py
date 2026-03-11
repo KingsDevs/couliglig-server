@@ -7,6 +7,7 @@ from models.actions import NavigationActionRequest
 from schema import DockConfig, Dock, RobotInfo, MapConfig
 import asyncio
 import httpx
+import os
 
 router = APIRouter(prefix="/actions", tags=["actions"])
 
@@ -18,11 +19,11 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
                  open(map.map_image_path, "rb") as map_pgm:
 
                 files = {
-                    "map_yaml": ("map.yaml", map_yaml, "application/x-yaml"),
-                    "map_pgm": ("map.pgm", map_pgm, "image/x-portable-graymap"),
+                    "map_yaml": (os.path.basename(map.map_yaml_path), map_yaml, "application/x-yaml"),
+                    "map_pgm": (os.path.basename(map.map_image_path), map_pgm, "image/x-portable-graymap"),
                     "dock_database": ("dock.yaml", dock_buffer, "application/x-yaml"),
                 }
-
+                
                 data = {
                     "command": "start",
                     "enable_commander": True,
