@@ -68,15 +68,15 @@ def generate_dock_yaml(docks: List[Dock], output_path: str):
             },
         }
 
-    buffer = io.StringIO()
-
-    yaml.dump(
+    yaml_str = yaml.dump(
         yaml_data,
-        buffer,
         Dumper=InlineListDumper,
         sort_keys=False,
         default_flow_style=False,
     )
 
+    buffer = io.BytesIO()
+    buffer.write(yaml_str.encode("utf-8"))
     buffer.seek(0)
+
     return buffer
