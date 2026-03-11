@@ -14,8 +14,8 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
 
-            with open(f"db/maps/{map.map_yaml_path}", "rb") as map_yaml, \
-                 open(f"db/maps/{map.map_image_path}", "rb") as map_pgm:
+            with open(map.map_yaml_path, "rb") as map_yaml, \
+                 open(map.map_image_path, "rb") as map_pgm:
 
                 files = {
                     "map_yaml": map_yaml,
