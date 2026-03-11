@@ -18,8 +18,8 @@ async def call_robot_nav(robot_ip, robot_name, robot_info: RobotInfo, map: MapCo
                  open(map.map_image_path, "rb") as map_pgm:
 
                 files = {
-                    "map_yaml": map_yaml,
-                    "map_pgm": map_pgm,
+                    "map_yaml": ("map.yaml", map_yaml, "application/x-yaml"),
+                    "map_pgm": ("map.pgm", map_pgm, "image/x-portable-graymap"),
                     "dock_database": ("dock.yaml", dock_buffer, "application/x-yaml"),
                 }
 
