@@ -70,10 +70,11 @@ def run_navigation(request: NavigationActionRequest, db: Session = Depends(get_d
 
     tasks = []
     for robot_data in request.robot_data:
-        robot_info = robot_info_dict.get(robot_data.robot_name)
+        robot_info = robot_info_dict.get(robot_data.namespace)
         if not robot_info:
-            continue
-        tasks.append(call_robot_nav(robot_data.robot_ip, robot_data.robot_name, robot_info, map, dock_buffer))
+            raise HTTPException(status_code=404, detail=f"No robot info found for namespace {robot_data.namespace}")
+
+        tasks.append(call_robot_nav(robot_data.robot_ip, robot_data.namespace, robot_info, map, dock_buffer))
 
     results = asyncio.run(asyncio.gather(*tasks))
 
