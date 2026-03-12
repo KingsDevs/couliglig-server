@@ -1,3 +1,6 @@
 paths:
   all:
     source: publisher
+
+webrtcAdditionalHosts:
+  - 192.168.20.244
