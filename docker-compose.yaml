@@ -49,13 +49,16 @@ services:
     container_name: mediamtx
     restart: always
     ports:
-      - "8554:8554"      # RTSP
-      - "8888:8888"      # HTTP API / HLS
-      - "8889:8889"      # WebRTC
-      - "8189:8189/udp"  # WebRTC UDP
+      - "8554:8554"   # RTSP
+      - "8888:8888"   # HLS
+      - "8889:8889"   # WebRTC
+      - "9997:9997"   # API
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+    command: /mediamtx.yml
     networks:
       - couliglig_network
-
+      
 networks:
   couliglig_network:
     driver: bridge
