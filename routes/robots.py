@@ -23,9 +23,6 @@ redis_client = redis.StrictRedis(
     decode_responses=True
 )
 
-redis_client.delete("robot_registrations")  # Clear the registrations on startup
-# redis_client.delete("robot_ips")  # Clear the IPs on startup
-
 def is_couliglig_lan(name: str) -> bool:
     return name.startswith("couliglig")
 
