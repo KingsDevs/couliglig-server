@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker, Session
 from schema import Base
 from dotenv import load_dotenv
@@ -17,24 +18,26 @@ engine = create_engine(
     connect_args={"check_same_thread": False} 
 )
 
+@event.listens_for(engine, "connect")
+def enable_sqlite_wal(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
 
 Base.metadata.create_all(bind=engine)
 
 SessionLocal = sessionmaker(
     bind=engine,
     autoflush=False,
-    autocommit=False
+    autocommit=False,
+    expire_on_commit=False
 )
 
-
-
-def get_db_session() -> Session:
-    """
-    Establishes a connection to the SQLite database
-    using environment variable SQLITE_DB_PATH.
-
-    Returns:
-        Session: A SQLAlchemy session connected to SQLite.
-    """
-    session = SessionLocal()
-    return session
+def get_db_session():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
