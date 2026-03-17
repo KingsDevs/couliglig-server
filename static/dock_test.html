@@ -60,12 +60,6 @@
               />
 
               <input
-                id="reserve_type"
-                class="form-control mb-2"
-                placeholder="Dock Type"
-              />
-
-              <input
                 id="reserve_id"
                 class="form-control mb-2"
                 placeholder="Dock ID"
@@ -90,12 +84,6 @@
               />
 
               <input
-                id="occupy_type"
-                class="form-control mb-2"
-                placeholder="Dock Type"
-              />
-
-              <input
                 id="occupy_id"
                 class="form-control mb-2"
                 placeholder="Dock ID"
@@ -115,11 +103,6 @@
           <div class="card">
             <div class="card-header">Release Dock</div>
             <div class="card-body">
-              <input
-                id="release_type"
-                class="form-control mb-2"
-                placeholder="Dock Type"
-              />
 
               <input
                 id="release_id"
@@ -189,11 +172,6 @@
           <div class="card">
             <div class="card-header">Get Dock State</div>
             <div class="card-body">
-              <input
-                id="state_type"
-                class="form-control mb-2"
-                placeholder="Dock Type"
-              />
 
               <input
                 id="state_id"
@@ -280,7 +258,6 @@
       function reserveDock() {
         post("/dock/reserve", {
           robot_id: document.getElementById("reserve_robot").value,
-          dock_type: document.getElementById("reserve_type").value,
           dock_id: document.getElementById("reserve_id").value,
         });
       }
@@ -288,14 +265,12 @@
       function occupyDock() {
         post("/dock/occupy", {
           robot_id: document.getElementById("occupy_robot").value,
-          dock_type: document.getElementById("occupy_type").value,
           dock_id: document.getElementById("occupy_id").value,
         });
       }
 
       function releaseDock() {
         post("/dock/release", {
-          dock_type: document.getElementById("release_type").value,
           dock_id: document.getElementById("release_id").value,
         });
       }
@@ -315,10 +290,9 @@
       }
 
       function dockState() {
-        const type = document.getElementById("state_type").value;
         const id = document.getElementById("state_id").value;
 
-        get(`/dock/dock_state?dock_type=${type}&dock_id=${id}`);
+        get(`/dock/dock_state?dock_id=${id}`);
       }
 
       function allStates() {

@@ -215,7 +215,6 @@ def reserve(request: ReserveDockRequest):
 
     success = reserve_dock(
         redis_client,
-        request.dock_type,
         request.dock_id,
         request.robot_id,
     )
@@ -234,7 +233,6 @@ def occupy(request: OccupyDockRequest):
 
     occupy_dock(
         redis_client,
-        request.dock_type,
         request.dock_id,
         request.robot_id,
     )
@@ -247,16 +245,15 @@ def release(request: ReleaseDockRequest):
 
     release_dock(
         redis_client,
-        request.dock_type,
         request.dock_id,
     )
 
     return {"status": "ok"}
 
 @router.get("/dock_state")
-def dock_state(dock_type: str, dock_id: str):
+def dock_state(dock_id: str):
 
-    state = get_dock_state(redis_client, dock_type, dock_id)
+    state = get_dock_state(redis_client, dock_id)
 
     if not state:
         raise HTTPException(

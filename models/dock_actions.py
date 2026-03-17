@@ -12,17 +12,14 @@ class RemoveItemRequest(BaseModel):
 
 
 class ReserveDockRequest(BaseModel):
-    dock_type: DockType
     dock_id: str
     robot_id: str
 
 
 class OccupyDockRequest(BaseModel):
-    dock_type: DockType
     dock_id: str
     robot_id: str
 
 
 class ReleaseDockRequest(BaseModel):
-    dock_type: DockType
     dock_id: str

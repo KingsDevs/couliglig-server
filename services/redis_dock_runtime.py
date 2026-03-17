@@ -13,8 +13,14 @@ def redis_client_from_env() -> redis.Redis:
 
     return redis.Redis(host=host, port=port, db=db, decode_responses=True)
 
+def _get_dock_type_by_id(r: redis.Redis, dock_id: str) -> DockType:
+    dock_type = r.hgetall(f"dock_meta:{dock_id}").get("dock_type")
+    if dock_type is None:
+        raise ValueError(f"Invalid dock_id: {dock_id}")
+    return DockType(dock_type)
 
 def _dock_key(dock_type: DockType, dock_id: str) -> str:
+
     return f"dock:{dock_type.value}:{dock_id}"
 
 
@@ -26,16 +32,16 @@ def _dock_lock_key(dock_type: DockType, dock_id: str) -> str:
 # ---------------------------------------------------------
 
 def clear_all_dock_keys(r: redis.Redis) -> None:
-    cursor = 0
-    while True:
-        cursor, keys = r.scan(cursor=cursor, match="dock:*", count=500)
-        r.set("active_dock_config", "none")
-        if keys:
-            r.delete(*keys)
+    r.set("active_dock_config", "none")
 
-        if cursor == 0:
-            break
-
+    for pattern in ("dock:*", "dock_meta:*", "lock:dock:*"):
+        cursor = 0
+        while True:
+            cursor, keys = r.scan(cursor=cursor, match=pattern, count=500)
+            if keys:
+                r.delete(*keys)
+            if cursor == 0:
+                break
 
 # ---------------------------------------------------------
 # Activate dock configuration
@@ -68,6 +74,13 @@ def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> Non
                 "item_id": "",
                 "ts": str(now),
             },
+        )
+
+        pipe.hset(
+            f"dock_meta:{d.dock_id}",
+            mapping={
+                "dock_type": d.dock_type.value,
+            }
         )
 
     pipe.execute()
@@ -114,7 +127,7 @@ def remove_item_from_pickup_dock(
     item_id: str
 ) -> bool:
 
-    key = _dock_key("pickup", dock_id)
+    key = _dock_key(DockType.PICKUP, dock_id)
 
     data = r.hgetall(key)
 
@@ -141,10 +154,11 @@ def remove_item_from_pickup_dock(
 
 def reserve_dock(
     r: redis.Redis,
-    dock_type: DockType,
     dock_id: str,
     robot_id: str
 ) -> bool:
+    
+    dock_type = _get_dock_type_by_id(r, dock_id)
 
     lock_key = _dock_lock_key(dock_type, dock_id)
 
@@ -174,11 +188,11 @@ def reserve_dock(
 
 def occupy_dock(
     r: redis.Redis,
-    dock_type: DockType,
     dock_id: str,
     robot_id: str,
 ):
 
+    dock_type = _get_dock_type_by_id(r, dock_id)
     dock_key = _dock_key(dock_type, dock_id)
 
     r.hset(
@@ -197,9 +211,9 @@ def occupy_dock(
 
 def release_dock(
     r: redis.Redis,
-    dock_type: DockType,
     dock_id: str,
 ):
+    dock_type = _get_dock_type_by_id(r, dock_id)
 
     lock_key = _dock_lock_key(dock_type, dock_id)
     dock_key = _dock_key(dock_type, dock_id)
@@ -222,10 +236,10 @@ def release_dock(
 
 def get_dock_state(
     r: redis.Redis,
-    dock_type: DockType,
     dock_id: str
 ):
 
+    dock_type = _get_dock_type_by_id(r, dock_id)
     key = _dock_key(dock_type, dock_id)
 
     return r.hgetall(key)
