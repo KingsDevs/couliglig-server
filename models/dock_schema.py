@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from definitions import DockType
-from enum import Enum
 
 class DockConfigCreate(BaseModel):
     name: str = Field(min_length=1)
@@ -50,9 +49,3 @@ class DockOut(BaseModel):
 
     class Config:
         from_attributes = True
-
-
-class DockStatus(Enum):
-    available = "available"
-    reserved = "reserved"
-    occupied = "occupied"

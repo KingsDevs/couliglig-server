@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from definitions import DockType
 
 class AddItemRequest(BaseModel):
     dock_id: str
@@ -11,17 +12,17 @@ class RemoveItemRequest(BaseModel):
 
 
 class ReserveDockRequest(BaseModel):
-    dock_type: str
+    dock_type: DockType
     dock_id: str
     robot_id: str
 
 
 class OccupyDockRequest(BaseModel):
-    dock_type: str
+    dock_type: DockType
     dock_id: str
     robot_id: str
 
 
 class ReleaseDockRequest(BaseModel):
-    dock_type: str
+    dock_type: DockType
     dock_id: str

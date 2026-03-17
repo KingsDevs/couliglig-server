@@ -2,8 +2,7 @@ import time
 import redis
 from schema import Dock
 from sqlalchemy.orm import Session
-from definitions import DockType
-from models.dock_schema import DockStatus
+from definitions import DockType, DockStatus
 
 
 def redis_client_from_env() -> redis.Redis:
