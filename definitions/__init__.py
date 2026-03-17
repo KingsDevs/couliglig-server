@@ -1,1 +1,1 @@
-from .dock_types import DockType
+from .dock_types import DockType, DockStatus
