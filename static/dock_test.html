@@ -197,6 +197,17 @@
             </div>
           </div>
         </div>
+
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header">Clear</div>
+            <div class="card-body">
+              <button class="btn btn-dark w-100" onclick="clearAll()">
+                Clear All
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="card">
@@ -297,6 +308,10 @@
 
       function allStates() {
         get("/dock/all_dock_states");
+      }
+
+      function clearAll() {
+        post("/dock/clear", {});
       }
     </script>
   </body>
