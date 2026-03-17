@@ -177,18 +177,26 @@ def activate_config(config_id: int, db: Session = Depends(get_db_session)):
 @router.post("/add-item")
 def add_item(request: AddItemRequest):
 
-    success = add_item_to_pickup_dock(
-        redis_client,
-        request.dock_id,
-        request.item_id,
-    )
-
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail="Dock does not exist or already has an item",
+    try:
+        
+        success = add_item_to_pickup_dock(
+            redis_client,
+            request.dock_id,
+            request.item_id,
         )
 
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail="Dock does not exist or already has an item",
+            )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+    
     return {"status": "ok"}
 
 

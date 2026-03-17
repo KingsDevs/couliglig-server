@@ -95,8 +95,12 @@ def add_item_to_pickup_dock(
     dock_id: str,
     item_id: str
 ) -> bool:
+    
+    dock_type = _get_dock_type_by_id(r, dock_id)
+    if dock_type != DockType.PICKUP:
+        raise ValueError("Can only add items to pickup docks")
 
-    key = _dock_key(DockType.PICKUP, dock_id)
+    key = _dock_key(dock_type, dock_id)
 
     data = r.hgetall(key)
 
