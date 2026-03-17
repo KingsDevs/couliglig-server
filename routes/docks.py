@@ -202,17 +202,22 @@ def add_item(request: AddItemRequest):
 
 @router.post("/remove-item")
 def remove_item(request: RemoveItemRequest):
+    try:
+        success = remove_item_from_pickup_dock(
+            redis_client,
+            request.dock_id,
+            request.item_id,
+        )
 
-    success = remove_item_from_pickup_dock(
-        redis_client,
-        request.dock_id,
-        request.item_id,
-    )
-
-    if not success:
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail="Item mismatch or dock empty",
+            )
+    except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail="Item mismatch or dock empty",
+            detail=str(e),
         )
 
     return {"status": "ok"}
@@ -220,17 +225,22 @@ def remove_item(request: RemoveItemRequest):
 
 @router.post("/reserve")
 def reserve(request: ReserveDockRequest):
+    try:
+        success = reserve_dock(
+            redis_client,
+            request.dock_id,
+            request.robot_id,
+        )
 
-    success = reserve_dock(
-        redis_client,
-        request.dock_id,
-        request.robot_id,
-    )
-
-    if not success:
+        if not success:
+            raise HTTPException(
+                status_code=409,
+                detail="Dock already reserved",
+            )
+    except ValueError as e:
         raise HTTPException(
-            status_code=409,
-            detail="Dock already reserved",
+            status_code=400,
+            detail=str(e),
         )
 
     return {"status": "ok"}
@@ -238,38 +248,53 @@ def reserve(request: ReserveDockRequest):
 
 @router.post("/occupy")
 def occupy(request: OccupyDockRequest):
-
-    occupy_dock(
-        redis_client,
-        request.dock_id,
-        request.robot_id,
-    )
+    try:
+        occupy_dock(
+            redis_client,
+            request.dock_id,
+            request.robot_id,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
 
     return {"status": "ok"}
 
 
 @router.post("/release")
 def release(request: ReleaseDockRequest):
-
-    release_dock(
-        redis_client,
-        request.dock_id,
-    )
+    try:
+        release_dock(
+            redis_client,
+            request.dock_id,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
 
     return {"status": "ok"}
 
 @router.get("/dock_state")
 def dock_state(dock_id: str):
+    try:
+        state = get_dock_state(redis_client, dock_id)
+        if not state:
+            raise HTTPException(
+                status_code=404,
+                detail="Dock not found",
+            )
 
-    state = get_dock_state(redis_client, dock_id)
-
-    if not state:
+        return state
+    except ValueError as e:
         raise HTTPException(
-            status_code=404,
-            detail="Dock not found",
+            status_code=400,
+            detail=str(e),
         )
 
-    return state
 
 @router.get("/all_dock_states")
 def all_dock_states():

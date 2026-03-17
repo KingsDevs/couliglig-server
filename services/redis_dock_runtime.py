@@ -19,6 +19,11 @@ def _get_dock_type_by_id(r: redis.Redis, dock_id: str) -> DockType:
         raise ValueError(f"Invalid dock_id: {dock_id}")
     return DockType(dock_type)
 
+def _check_if_dock_id_exists(r: redis.Redis, dock_id: str) -> bool:
+    if not r.sismember("docks:all", dock_id):
+        return False
+    return True
+
 def _dock_key(dock_type: DockType, dock_id: str) -> str:
 
     return f"dock:{dock_type.value}:{dock_id}"
@@ -42,6 +47,12 @@ def clear_all_dock_keys(r: redis.Redis) -> None:
                 r.delete(*keys)
             if cursor == 0:
                 break
+    try:
+        r.delete("docks:all")
+        r.delete("docks:pickup")
+        r.delete("docks:receiving")
+    except Exception as e:
+        print(f"Error clearing dock sets: {e}")
 
 # ---------------------------------------------------------
 # Activate dock configuration
@@ -83,6 +94,8 @@ def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> Non
             }
         )
 
+        pipe.sadd("docks:all", d.dock_id)
+
     pipe.execute()
 
 
@@ -95,6 +108,9 @@ def add_item_to_pickup_dock(
     dock_id: str,
     item_id: str
 ) -> bool:
+    
+    if not _check_if_dock_id_exists(r, dock_id):
+        raise ValueError(f"Dock ID {dock_id} does not exist")
     
     dock_type = _get_dock_type_by_id(r, dock_id)
     if dock_type != DockType.PICKUP:
@@ -130,6 +146,13 @@ def remove_item_from_pickup_dock(
     dock_id: str,
     item_id: str
 ) -> bool:
+    
+    if not _check_if_dock_id_exists(r, dock_id):
+        raise ValueError(f"Dock ID {dock_id} does not exist")
+    
+    dock_type = _get_dock_type_by_id(r, dock_id)
+    if dock_type != DockType.PICKUP:
+        raise ValueError("Can only remove items from pickup docks")
 
     key = _dock_key(DockType.PICKUP, dock_id)
 
@@ -162,8 +185,10 @@ def reserve_dock(
     robot_id: str
 ) -> bool:
     
+    if not _check_if_dock_id_exists(r, dock_id):
+        raise ValueError(f"Dock ID {dock_id} does not exist")
+    
     dock_type = _get_dock_type_by_id(r, dock_id)
-
     lock_key = _dock_lock_key(dock_type, dock_id)
 
     # atomic lock
@@ -195,6 +220,8 @@ def occupy_dock(
     dock_id: str,
     robot_id: str,
 ):
+    if not _check_if_dock_id_exists(r, dock_id):
+        raise ValueError(f"Dock ID {dock_id} does not exist")
 
     dock_type = _get_dock_type_by_id(r, dock_id)
     dock_key = _dock_key(dock_type, dock_id)
@@ -217,6 +244,9 @@ def release_dock(
     r: redis.Redis,
     dock_id: str,
 ):
+    if not _check_if_dock_id_exists(r, dock_id):
+        raise ValueError(f"Dock ID {dock_id} does not exist")
+
     dock_type = _get_dock_type_by_id(r, dock_id)
 
     lock_key = _dock_lock_key(dock_type, dock_id)
@@ -242,6 +272,8 @@ def get_dock_state(
     r: redis.Redis,
     dock_id: str
 ):
+    if not _check_if_dock_id_exists(r, dock_id):
+        raise ValueError(f"Dock ID {dock_id} does not exist")
 
     dock_type = _get_dock_type_by_id(r, dock_id)
     key = _dock_key(dock_type, dock_id)
