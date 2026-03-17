@@ -3,6 +3,7 @@ import redis
 from schema import Dock
 from sqlalchemy.orm import Session
 from definitions import DockType
+from models.dock_schema import DockStatus
 
 
 def redis_client_from_env() -> redis.Redis:
@@ -63,7 +64,7 @@ def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> Non
         pipe.hset(
             key,
             mapping={
-                "status": "available",
+                "status": DockStatus.available.value,
                 "robot_id": "",
                 "item_id": "",
                 "ts": str(now),
@@ -159,7 +160,7 @@ def reserve_dock(
     r.hset(
         dock_key,
         mapping={
-            "status": "reserved",
+            "status": DockStatus.reserved.value,
             "robot_id": robot_id,
             "ts": int(time.time()),
         },
@@ -184,7 +185,7 @@ def occupy_dock(
     r.hset(
         dock_key,
         mapping={
-            "status": "occupied",
+            "status": DockStatus.occupied.value,
             "robot_id": robot_id,
             "ts": int(time.time()),
         },
@@ -209,7 +210,7 @@ def release_dock(
     r.hset(
         dock_key,
         mapping={
-            "status": "available",
+            "status": DockStatus.available.value,
             "robot_id": "",
             "ts": int(time.time()),
         },
