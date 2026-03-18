@@ -205,8 +205,7 @@ def remove_item(request: RemoveItemRequest):
     try:
         success = remove_item_from_pickup_dock(
             redis_client,
-            request.dock_id,
-            request.item_id,
+            request.dock_id
         )
 
         if not success:

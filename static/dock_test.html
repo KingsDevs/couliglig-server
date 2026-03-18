@@ -151,13 +151,6 @@
                 class="form-control mb-2"
                 placeholder="Dock ID"
               />
-
-              <input
-                id="remove_item_id"
-                class="form-control mb-2"
-                placeholder="Item ID"
-              />
-
               <button class="btn btn-secondary w-100" onclick="removeItem()">
                 Remove Item
               </button>
@@ -295,8 +288,7 @@
 
       function removeItem() {
         post("/dock/remove-item", {
-          dock_id: document.getElementById("remove_item_dock").value,
-          item_id: document.getElementById("remove_item_id").value,
+          dock_id: document.getElementById("remove_item_dock").value
         });
       }
 

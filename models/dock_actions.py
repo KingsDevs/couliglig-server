@@ -8,7 +8,6 @@ class AddItemRequest(BaseModel):
 
 class RemoveItemRequest(BaseModel):
     dock_id: str
-    item_id: str
 
 
 class ReserveDockRequest(BaseModel):

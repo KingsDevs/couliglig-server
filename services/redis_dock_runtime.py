@@ -143,8 +143,7 @@ def add_item_to_pickup_dock(
 
 def remove_item_from_pickup_dock(
     r: redis.Redis,
-    dock_id: str,
-    item_id: str
+    dock_id: str
 ) -> bool:
     
     if not _check_if_dock_id_exists(r, dock_id):
@@ -159,9 +158,6 @@ def remove_item_from_pickup_dock(
     data = r.hgetall(key)
 
     if not data:
-        return False
-
-    if data.get("item_id") != item_id:
         return False
 
     r.hset(
