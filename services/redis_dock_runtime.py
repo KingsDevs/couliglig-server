@@ -32,6 +32,9 @@ def _dock_key(dock_type: DockType, dock_id: str) -> str:
 def _dock_lock_key(dock_type: DockType, dock_id: str) -> str:
     return f"lock:dock:{dock_type.value}:{dock_id}"
 
+def get_active_dock_config_id(r: redis.Redis) -> str:
+    return r.get("active_dock_config")
+
 # ---------------------------------------------------------
 # Clear runtime
 # ---------------------------------------------------------

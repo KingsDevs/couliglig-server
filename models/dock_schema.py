@@ -14,6 +14,7 @@ class DockConfigOut(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    is_active: bool = False
 
     class Config:
         from_attributes = True

@@ -6,7 +6,7 @@ from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
 from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
-from services.redis_dock_runtime import redis_client_from_env, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state, get_all_dock_states
+from services.redis_dock_runtime import redis_client_from_env, get_active_dock_config_id, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state, get_all_dock_states
 
 router = APIRouter(prefix="/dock", tags=["dock"])
 
@@ -27,7 +27,20 @@ def create_config(payload: DockConfigCreate, db: Session = Depends(get_db_sessio
 
 @router.get("/configs", response_model=list[DockConfigOut])
 def list_configs(db: Session = Depends(get_db_session)):
-    return db.query(DockConfig).all()
+    active_config = get_active_dock_config_id(redis_client)
+    configs = db.query(DockConfig).all()
+
+    config_outs = []
+    for cfg in configs:
+        is_active = str(cfg.id) == active_config if active_config else False
+        config_outs.append(DockConfigOut(
+            id=cfg.id,
+            name=cfg.name,
+            description=cfg.description,
+            is_active=is_active,
+        ))
+    
+    return config_outs
 
 @router.get("", response_model=list[DockOut])
 def list_docks(config_id: int, db: Session = Depends(get_db_session)):
