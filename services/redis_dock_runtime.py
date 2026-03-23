@@ -1,7 +1,6 @@
 import json
 import math
 import time
-import numpy as np
 import redis
 import requests as _requests
 from schema import Dock
@@ -98,6 +97,9 @@ def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> Non
             f"dock_meta:{d.dock_id}",
             mapping={
                 "dock_type": d.dock_type.value,
+                "x": d.x,
+                "y": d.y,
+                "theta": d.theta,
             }
         )
 
@@ -489,6 +491,7 @@ def _get_all_items_sorted(r: redis.Redis) -> list:
     for iid in r.smembers("items:all"):
         data = r.hgetall(f"item:{iid}")
         if data:
+            data["item_id"] = iid
             items.append(data)
     items.sort(key=lambda d: int(d["index"]))
     return items
@@ -500,6 +503,7 @@ def _get_all_robots_by_type_sorted(r: redis.Redis, robot_type: str) -> list:
     for rid in r.smembers(key):
         data = r.hgetall(f"robot:{rid}")
         if data and data.get("type") == robot_type:
+            data["robot_id"] = rid
             robots.append(data)
     robots.sort(key=lambda d: int(d["index"]))
     return robots
@@ -510,6 +514,7 @@ def _get_all_waiting_zones_sorted(r: redis.Redis) -> list:
     for wid in r.smembers("wz:all"):
         data = r.hgetall(f"wz:{wid}")
         if data:
+            data["wz_id"] = wid
             zones.append(data)
     zones.sort(key=lambda d: int(d["index"]))
     return zones
@@ -579,163 +584,109 @@ def sync_all_robot_positions(r: redis.Redis, port: int = 8000) -> dict:
 
 
 # =============================================================
-# Observation builders  –  match training-env get_observation()
+# All-docks state query
 # =============================================================
 
-def get_picker_observation(r: redis.Redis, picker_id: str) -> dict:
-    """
-    Build the picker observation dict that matches the training environment exactly.
+def _get_all_docks_state(r: redis.Redis) -> list:
+    """Return all active docks with their positions and runtime state."""
+    docks = []
+    cursor = 0
+    while True:
+        cursor, keys = r.scan(cursor=cursor, match="dock_meta:*", count=500)
+        for key in keys:
+            dock_id = key.split(":", 1)[1]
+            meta = r.hgetall(key)
+            if not meta:
+                continue
+            dock_type_str = meta.get("dock_type", "")
+            try:
+                dock_type = DockType(dock_type_str)
+            except ValueError:
+                continue
+            runtime = r.hgetall(_dock_key(dock_type, dock_id))
+            docks.append({
+                "dock_id": dock_id,
+                "dock_type": dock_type_str,
+                "x": float(meta["x"]) if "x" in meta else None,
+                "y": float(meta["y"]) if "y" in meta else None,
+                "theta": float(meta["theta"]) if "theta" in meta else None,
+                "status": runtime.get("status"),
+                "robot_id": runtime.get("robot_id", ""),
+                "item_id": runtime.get("item_id", ""),
+            })
+        if cursor == 0:
+            break
+    return docks
 
-    Keys returned:
-        obs_vec               float32 (1,)
-        item_embeddings       float32 (MAX_ITEMS, 6)
-        item_mask             int8    (MAX_ITEMS,)
-        transporter_embeddings float32 (max_transporters, 4)
-        transporter_mask      int8    (max_transporters,)
-        action_mask           int8    (1 + MAX_ITEMS + max_transporters,)
-    """
-    cfg = _get_runtime_config(r)
-    map_w = cfg["map_w"]
-    map_h = cfg["map_h"]
-    max_distance = cfg["max_distance"]
-    current_max_cap = cfg["current_max_cap"]
-    max_items = cfg["max_items"]
-    max_transporters = cfg["max_transporters"]
 
+# =============================================================
+# Agent state builders
+# =============================================================
+
+def get_picker_state(r: redis.Redis, picker_id: str) -> dict:
+    """
+    Return raw state for a picker agent:
+      picker   – own id, x, y, held_item
+      items    – id, index, x, y, weight, pickup_status, delivery_status, receiver_index
+      transporters – id, index, x, y, capacity, max_capacity, in_waiting_zone
+      docks    – dock_id, dock_type, x, y, theta, status, robot_id, item_id
+    """
     picker_data = r.hgetall(f"robot:{picker_id}")
     if not picker_data:
         raise ValueError(f"Picker {picker_id} not found in Redis")
 
-    px = float(picker_data["x"])
-    py = float(picker_data["y"])
-    holds_item = 1.0 if picker_data.get("held_item", "") else 0.0
-
-    picker_action_dim = 1 + max_items + max_transporters
-    action_mask = np.zeros(picker_action_dim, dtype=np.int8)
-    action_mask[0] = 1  # idle always allowed
-
-    # ------------------------------------------------------------------
-    # Item embeddings  [norm_dist, norm_weight, pickup_status,
-    #                   delivery_status, dx_i, dy_i]
-    # ------------------------------------------------------------------
     items = _get_all_items_sorted(r)
-    item_emb_list = []
-    item_mask = np.zeros(max_items, dtype=np.int8)
-
-    for item_index in range(max_items):
-        if item_index >= len(items):
-            item_emb_list.append([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-            continue
-
-        item = items[item_index]
-        ix = float(item["x"])
-        iy = float(item["y"])
-        pickup_status = item["pickup_status"] == "1"
-        delivery_status = item["delivery_status"] == "1"
-        weight = float(item["weight"])
-
-        # Match training env: use dist=1.0 placeholder when already picked up
-        dist = _euclidean_dist(px, py, ix, iy) if not pickup_status else 1.0
-        norm_dist = min(dist / (max_distance + 1e-6), 1.0)
-        norm_weight = weight / current_max_cap
-
-        dx_i = (ix - px) / map_w
-        dy_i = (iy - py) / map_h
-
-        can_pick = (not pickup_status) and (not holds_item)
-        item_mask[item_index] = 1 if can_pick else 0
-        if can_pick:
-            action_mask[1 + item_index] = 1
-
-        item_emb_list.append([
-            norm_dist, norm_weight,
-            float(pickup_status), float(delivery_status),
-            dx_i, dy_i,
-        ])
-
-    item_embeddings = np.array(item_emb_list, dtype=np.float32)
-
-    # ------------------------------------------------------------------
-    # Transporter embeddings  [capacity_ratio, norm_dist, dx, dy]
-    # ------------------------------------------------------------------
     transporters = _get_all_robots_by_type_sorted(r, "transporter")
-    transporter_emb_list = []
-    transporter_mask = np.zeros(max_transporters, dtype=np.int8)
-
-    for i in range(max_transporters):
-        if i >= len(transporters):
-            transporter_emb_list.append([0.0, 0.0, 0.0, 0.0])
-            continue
-
-        t = transporters[i]
-        tx = float(t["x"])
-        ty = float(t["y"])
-        capacity = int(t.get("capacity", 0))
-        max_cap = int(t.get("max_capacity", 1))
-        in_wz = t.get("in_waiting_zone", "0") == "1"
-
-        dx = tx - px
-        dy = ty - py
-        dist = _euclidean_dist(px, py, tx, ty)
-        norm_dist = min(dist / (max_distance + 1e-6), 1.0)
-
-        if holds_item and capacity < max_cap and in_wz:
-            transporter_mask[i] = 1
-            action_mask[1 + max_items + i] = 1
-
-        transporter_emb_list.append([
-            min(capacity / max_cap, 1.0),
-            norm_dist,
-            dx / map_w,
-            dy / map_h,
-        ])
-
-    transporter_embeddings = np.array(transporter_emb_list, dtype=np.float32)
-
-    obs_vec = np.array([holds_item], dtype=np.float32)
+    docks = _get_all_docks_state(r)
 
     return {
-        "obs_vec": obs_vec,
-        "item_embeddings": item_embeddings,
-        "item_mask": item_mask,
-        "transporter_embeddings": transporter_embeddings,
-        "transporter_mask": transporter_mask,
-        "action_mask": action_mask,
+        "picker": {
+            "id": picker_id,
+            "x": float(picker_data.get("x", 0)),
+            "y": float(picker_data.get("y", 0)),
+            "held_item": picker_data.get("held_item", ""),
+        },
+        "items": [
+            {
+                "id": item["item_id"],
+                "index": int(item["index"]),
+                "x": float(item["x"]),
+                "y": float(item["y"]),
+                "weight": float(item["weight"]),
+                "pickup_status": item["pickup_status"] == "1",
+                "delivery_status": item["delivery_status"] == "1",
+                "receiver_index": int(item["receiver_index"]),
+            }
+            for item in items
+        ],
+        "transporters": [
+            {
+                "id": t["robot_id"],
+                "index": int(t["index"]),
+                "x": float(t.get("x", 0)),
+                "y": float(t.get("y", 0)),
+                "capacity": int(t.get("capacity", 0)),
+                "max_capacity": int(t.get("max_capacity", 1)),
+                "in_waiting_zone": t.get("in_waiting_zone", "0") == "1",
+            }
+            for t in transporters
+        ],
+        "docks": docks,
     }
 
 
-def get_transporter_observation(r: redis.Redis, transporter_id: str) -> dict:
+def get_transporter_state(r: redis.Redis, transporter_id: str) -> dict:
     """
-    Build the transporter observation dict that matches the training environment exactly.
-
-    Keys returned:
-        obs_vec                   float32 (1 + MAX_ITEMS,)
-        picker_embeddings         float32 (max_pickers, 4)
-        picker_mask               int8    (max_pickers,)
-        item_embeddings           float32 (MAX_ITEMS, 6)
-        item_mask                 int8    (MAX_ITEMS,)
-        waiting_zone_embeddings   float32 (MAX_WZ, 3)
-        waiting_zone_mask         int8    (MAX_WZ,)
-        action_mask               int8    (1 + MAX_WZ + MAX_ITEMS,)
+    Return raw state for a transporter agent:
+      transporter  – own id, x, y, capacity, max_capacity, in_waiting_zone, carried_items
+      pickers      – id, index, x, y, held_item
+      items        – id, index, x, y, weight, statuses, receiver_x, receiver_y, carried
+      waiting_zones – id, index, x, y, occupied
+      docks        – dock_id, dock_type, x, y, theta, status, robot_id, item_id
     """
-    cfg = _get_runtime_config(r)
-    map_w = cfg["map_w"]
-    map_h = cfg["map_h"]
-    max_distance = cfg["max_distance"]
-    current_max_cap = cfg["current_max_cap"]
-    max_items = cfg["max_items"]
-    max_pickers = cfg["max_pickers"]
-    max_wz = cfg["max_wz"]
-
     t_data = r.hgetall(f"robot:{transporter_id}")
     if not t_data:
         raise ValueError(f"Transporter {transporter_id} not found in Redis")
-
-    tx = float(t_data["x"])
-    ty = float(t_data["y"])
-    capacity = int(t_data.get("capacity", 0))
-    max_cap = int(t_data.get("max_capacity", 1))
-    load_ratio = min(capacity / max_cap, 1.0)
 
     carried_raw = t_data.get("carried_items", "")
     carried_items = (
@@ -743,150 +694,71 @@ def get_transporter_observation(r: redis.Redis, transporter_id: str) -> dict:
         if carried_raw else set()
     )
 
-    transporter_action_dim = 1 + max_wz + max_items
-    action_mask = np.zeros(transporter_action_dim, dtype=np.int8)
-    action_mask[0] = 1  # idle always allowed
-
-    # ------------------------------------------------------------------
-    # Picker embeddings  [norm_dist, holds, dx, dy]
-    # ------------------------------------------------------------------
     pickers = _get_all_robots_by_type_sorted(r, "picker")
-    picker_emb_list = []
-    picker_mask = np.zeros(max_pickers, dtype=np.int8)
-
-    for i in range(max_pickers):
-        if i >= len(pickers):
-            picker_emb_list.append([0.0, 0.0, 0.0, 0.0])
-            continue
-
-        p = pickers[i]
-        px = float(p["x"])
-        py = float(p["y"])
-        holds = 1.0 if p.get("held_item", "") else 0.0
-
-        dx = px - tx
-        dy = py - ty
-        dist = _euclidean_dist(tx, ty, px, py)
-        norm_dist = min(dist / (max_distance + 1e-6), 1.0)
-
-        picker_emb_list.append([norm_dist, holds, dx / map_w, dy / map_h])
-        picker_mask[i] = 1  # all active pickers are visible
-
-    picker_embeddings = np.array(picker_emb_list, dtype=np.float32)
-
-    # ------------------------------------------------------------------
-    # Waiting-zone embeddings  [norm_dist, dx, dy]
-    # ------------------------------------------------------------------
-    waiting_zones = _get_all_waiting_zones_sorted(r)
-    wz_emb_list = []
-    wz_mask = np.zeros(max_wz, dtype=np.int8)
-
-    for i in range(max_wz):
-        if i >= len(waiting_zones):
-            wz_emb_list.append([1.0, 0.0, 0.0])
-            continue
-
-        wz = waiting_zones[i]
-        wx = float(wz["x"])
-        wy = float(wz["y"])
-        occupied = wz["occupied"] == "1"
-
-        dx = wx - tx
-        dy = wy - ty
-        dist = _euclidean_dist(tx, ty, wx, wy)
-        norm_dist = min(dist / (max_distance + 1e-6), 1.0)
-
-        wz_emb_list.append([norm_dist, dx / map_w, dy / map_h])
-
-        if not occupied:
-            wz_mask[i] = 1
-            action_mask[1 + i] = 1
-
-    while len(wz_emb_list) < max_wz:
-        wz_emb_list.append([1.0, 0.0, 0.0])
-
-    wz_embeddings = np.array(wz_emb_list, dtype=np.float32)
-
-    # ------------------------------------------------------------------
-    # Item embeddings  [norm_dist, norm_weight, pickup_status,
-    #                   delivery_status, dx_r, dy_r]
-    # (distances are to the receiver, not the item position)
-    # ------------------------------------------------------------------
     items = _get_all_items_sorted(r)
-    item_emb_list = []
-    item_mask = np.zeros(max_items, dtype=np.int8)
-    delivery_mask_scalar = []
+    waiting_zones = _get_all_waiting_zones_sorted(r)
+    docks = _get_all_docks_state(r)
 
-    for item_index in range(max_items):
-        if item_index >= len(items):
-            item_emb_list.append([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
-            delivery_mask_scalar.append(0.0)
-            continue
-
-        item = items[item_index]
-        pickup_status = item["pickup_status"] == "1"
-        delivery_status = item["delivery_status"] == "1"
-        weight = float(item["weight"])
+    items_out = []
+    for item in items:
         receiver_index = int(item["receiver_index"])
-
         recv_data = r.hgetall(f"receiver:{receiver_index}")
-        if recv_data:
-            rx = float(recv_data["x"])
-            ry = float(recv_data["y"])
-        else:
-            rx, ry = tx, ty  # fallback: treat as co-located
-
-        dist = _euclidean_dist(tx, ty, rx, ry)
-        norm_dist = min(dist / (max_distance + 1e-6), 1.0)
-        norm_weight = weight / current_max_cap
-
-        dx_r = (rx - tx) / map_w
-        dy_r = (ry - ty) / map_h
-
-        can_deliver = (not delivery_status) and (item_index in carried_items)
-        delivery_mask_scalar.append(1.0 if can_deliver else 0.0)
-
-        item_emb_list.append([
-            norm_dist, norm_weight,
-            float(pickup_status), float(delivery_status),
-            dx_r, dy_r,
-        ])
-
-        item_mask[item_index] = 1 if can_deliver else 0
-        if can_deliver:
-            action_mask[1 + max_wz + item_index] = 1
-
-    while len(item_emb_list) < max_items:
-        item_emb_list.append([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
-        delivery_mask_scalar.append(0.0)
-
-    item_embeddings = np.array(item_emb_list, dtype=np.float32)
-
-    obs_vec = np.concatenate([
-        np.array([load_ratio], dtype=np.float32),
-        np.array(delivery_mask_scalar, dtype=np.float32),
-    ]).astype(np.float32)
+        items_out.append({
+            "id": item["item_id"],
+            "index": int(item["index"]),
+            "x": float(item["x"]),
+            "y": float(item["y"]),
+            "weight": float(item["weight"]),
+            "pickup_status": item["pickup_status"] == "1",
+            "delivery_status": item["delivery_status"] == "1",
+            "receiver_index": receiver_index,
+            "receiver_x": float(recv_data["x"]) if recv_data else None,
+            "receiver_y": float(recv_data["y"]) if recv_data else None,
+            "carried": int(item["index"]) in carried_items,
+        })
 
     return {
-        "obs_vec": obs_vec,
-        "item_embeddings": item_embeddings,
-        "item_mask": item_mask,
-        "waiting_zone_embeddings": wz_embeddings,
-        "waiting_zone_mask": wz_mask,
-        "picker_embeddings": picker_embeddings,
-        "picker_mask": picker_mask,
-        "action_mask": action_mask,
+        "transporter": {
+            "id": transporter_id,
+            "x": float(t_data.get("x", 0)),
+            "y": float(t_data.get("y", 0)),
+            "capacity": int(t_data.get("capacity", 0)),
+            "max_capacity": int(t_data.get("max_capacity", 1)),
+            "in_waiting_zone": t_data.get("in_waiting_zone", "0") == "1",
+            "carried_items": list(carried_items),
+        },
+        "pickers": [
+            {
+                "id": p["robot_id"],
+                "index": int(p["index"]),
+                "x": float(p.get("x", 0)),
+                "y": float(p.get("y", 0)),
+                "held_item": p.get("held_item", ""),
+            }
+            for p in pickers
+        ],
+        "items": items_out,
+        "waiting_zones": [
+            {
+                "id": wz["wz_id"],
+                "index": int(wz["index"]),
+                "x": float(wz["x"]),
+                "y": float(wz["y"]),
+                "occupied": wz["occupied"] == "1",
+            }
+            for wz in waiting_zones
+        ],
+        "docks": docks,
     }
 
 
-def get_observation(r: redis.Redis, agent_id: str) -> dict:
+def get_agent_state(r: redis.Redis, agent_id: str) -> dict:
     """
-    Dispatch to the correct observation builder based on agent prefix,
-    mirroring the training environment's get_observation().
+    Dispatch to the correct state builder based on agent prefix.
     """
     if agent_id.startswith("picker_"):
-        return get_picker_observation(r, agent_id)
+        return get_picker_state(r, agent_id)
     elif agent_id.startswith("transporter_"):
-        return get_transporter_observation(r, agent_id)
+        return get_transporter_state(r, agent_id)
     else:
         raise ValueError(f"Unknown agent prefix for agent_id: {agent_id}")

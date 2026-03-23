@@ -10,9 +10,9 @@ from services.redis_dock_runtime import (
     update_item_state,
     set_receiver_location,
     update_waiting_zone_state,
-    get_picker_observation,
-    get_transporter_observation,
-    get_observation,
+    get_picker_state,
+    get_transporter_state,
+    get_agent_state,
     set_agent_robot_mapping,
     get_all_agent_robot_mappings,
     sync_all_robot_positions,
@@ -254,52 +254,43 @@ def post_waiting_zone_states_batch(payloads: list[WaitingZonePayload]):
 
 
 # ---------------------------------------------------------
-# Observation getters
+# State getters
 # ---------------------------------------------------------
 
 @router.get("/picker/{picker_id}")
 def get_picker_obs(picker_id: str):
     """
-    Return the picker observation dict matching the training environment exactly.
-    Arrays are serialised to nested lists for JSON transport.
+    Return raw state for a picker: own x/y, all items (id, x, y, weight, statuses),
+    all transporters (id, x, y, capacity), all docks (id, type, x, y, status).
     """
     try:
-        obs = get_picker_observation(redis_client, picker_id)
-        return {k: v.tolist() for k, v in obs.items()}
+        return get_picker_state(redis_client, picker_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except KeyError as e:
-        raise HTTPException(status_code=503, detail=f"Runtime config missing: {e}")
 
 
 @router.get("/transporter/{transporter_id}")
 def get_transporter_obs(transporter_id: str):
     """
-    Return the transporter observation dict matching the training environment exactly.
-    Arrays are serialised to nested lists for JSON transport.
+    Return raw state for a transporter: own x/y, all pickers (id, x, y),
+    all items (id, x, y, weight, receiver_x, receiver_y, carried),
+    all waiting zones (id, x, y, occupied), all docks (id, type, x, y, status).
     """
     try:
-        obs = get_transporter_observation(redis_client, transporter_id)
-        return {k: v.tolist() for k, v in obs.items()}
+        return get_transporter_state(redis_client, transporter_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except KeyError as e:
-        raise HTTPException(status_code=503, detail=f"Runtime config missing: {e}")
 
 
 @router.get("/agent/{agent_id}")
 def get_agent_obs(agent_id: str):
     """
-    Dispatch by agent prefix (picker_* / transporter_*) and return the
-    matching observation dict, mirroring env.get_observation().
+    Dispatch by agent prefix (picker_* / transporter_*) and return raw state.
     """
     try:
-        obs = get_observation(redis_client, agent_id)
-        return {k: v.tolist() for k, v in obs.items()}
+        return get_agent_state(redis_client, agent_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except KeyError as e:
-        raise HTTPException(status_code=503, detail=f"Runtime config missing: {e}")
 
 
 # ---------------------------------------------------------
