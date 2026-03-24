@@ -203,6 +203,21 @@
         </div>
       </div>
 
+      <div class="row">
+        <!-- OBS BUILDER INPUTS -->
+        <div class="col-md-12">
+          <div class="card">
+            <div class="card-header">Obs Builder Inputs</div>
+            <div class="card-body">
+              <p class="text-muted mb-2">Fetches all live runtime data: dock states and dock positions (y, x, yaw).</p>
+              <button class="btn btn-primary w-100" onclick="obsBuilderInputs()">
+                Get Obs Builder Inputs
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">Response</div>
 
@@ -304,6 +319,10 @@
 
       function clearAll() {
         post("/dock/clear", {});
+      }
+
+      function obsBuilderInputs() {
+        get("/obs/builder-inputs");
       }
     </script>
   </body>
