@@ -164,18 +164,20 @@ def get_item_weight(r: redis.Redis, item_id: str) -> float | None:
 
 
 def get_all_item_weights(r: redis.Redis) -> dict[str, float]:
-    """Returns { item_id: weight } for all items that have a weight stored."""
-    cursor = 0
+    """Returns { item_id: weight } for all docks in docks:all that have an item with a weight."""
     weights: dict[str, float] = {}
-    while True:
-        cursor, keys = r.scan(cursor=cursor, match="item:weight:*", count=500)
-        for key in keys:
-            item_id = key.split("item:weight:")[1]
-            val = r.get(key)
-            if val is not None:
-                weights[item_id] = float(val)
-        if cursor == 0:
-            break
+    dock_ids = r.smembers("docks:all")
+    for dock_id in dock_ids:
+        dock_type_str = r.hget(f"dock_meta:{dock_id}", "dock_type")
+        if dock_type_str is None:
+            continue
+        data = r.hgetall(f"dock:{dock_type_str}:{dock_id}")
+        if not data:
+            continue
+        item_id = data.get("item_id")
+        item_weight = data.get("item_weight")
+        if item_id and item_weight not in (None, ""):
+            weights[item_id] = float(item_weight)
     return weights
 
 
@@ -326,6 +328,7 @@ def add_item_to_pickup_dock(
     r: redis.Redis,
     dock_id: str,
     item_id: str,
+    item_weight: float = 1.0,
     weight: float | None = None,   # ← optionally register weight at add time
 ) -> bool:
     if not _check_if_dock_id_exists(r, dock_id):
@@ -343,7 +346,7 @@ def add_item_to_pickup_dock(
     if data.get("item_id"):
         return False
 
-    r.hset(key, mapping={"item_id": item_id, "ts": int(time.time())})
+    r.hset(key, mapping={"item_id": item_id, "item_weight": item_weight, "ts": int(time.time())})
 
     if weight is not None:
         set_item_weight(r, item_id, weight)
@@ -480,6 +483,7 @@ def get_all_dock_states(r: redis.Redis) -> list[dict]:
                     "status":    data.get("status"),
                     "robot_id":  data.get("robot_id"),
                     "item_id":   data.get("item_id"),
+                    "item_weight": data.get("item_weight"),
                     "ts":        data.get("ts"),
                 })
         if cursor == 0:
@@ -536,7 +540,7 @@ def get_obs_builder_inputs(
     return {
         "dock_states":         get_all_dock_states(r),
         "dock_positions":      get_all_dock_positions(r),
-        # "item_weights":        get_all_item_weights(r),
+        "item_weights":        get_all_item_weights(r),
         # "robot_positions":     get_all_robot_positions(r),
         # "picker_has_item":     picker_has_item,
         # "transporter_loads":   transporter_loads,
