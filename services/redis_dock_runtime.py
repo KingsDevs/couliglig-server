@@ -208,6 +208,7 @@ def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[float, float, flo
     except (json.JSONDecodeError, TypeError):
         return positions
     for _, payload in robot_dict.items():
+        print(f"Checking robot payload: {payload}")
         ip = payload.get("ip") if isinstance(payload, dict) else payload
         domain_id = payload.get("domain_id") if isinstance(payload, dict) else None
 
