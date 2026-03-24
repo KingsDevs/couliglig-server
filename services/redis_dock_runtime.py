@@ -133,7 +133,7 @@ def get_dock_position(r: redis.Redis, dock_id: str) -> tuple[int, int] | None:
 
 
 def get_all_dock_positions(r: redis.Redis) -> dict[str, tuple[float, float, float]]:
-    """Returns { dock_id: (y, x, yaw) } for all docks in docks:all."""
+    """Returns { dock_id: (x, y, yaw) } for all docks in docks:all."""
     positions: dict[str, tuple[float, float, float]] = {}
     dock_ids = r.smembers("docks:all")
     for dock_id in dock_ids:
@@ -147,7 +147,7 @@ def get_all_dock_positions(r: redis.Redis) -> dict[str, tuple[float, float, floa
         y = data.get("y")
         yaw = data.get("yaw")
         if x not in (None, "") and y not in (None, "") and yaw not in (None, ""):
-            positions[dock_id] = (float(y), float(x), float(yaw))
+            positions[dock_id] = (float(x), float(y), float(yaw))
     return positions
 
 
@@ -197,9 +197,9 @@ def get_robot_position(r: redis.Redis, agent_id: str) -> tuple[int, int] | None:
     return (int(data["y"]), int(data["x"]))
 
 
-def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[float, float, float]]:
-    """Returns { namespace: (y, x, yaw) } for all registered robots by querying each robot's /roslib/transform endpoint."""
-    positions: dict[str, tuple[float, float, float]] = {}
+def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[str, float, float, float]]:
+    """Returns { namespace: (robot_type, x, y, yaw) } for all registered robots by querying each robot's /roslib/transform endpoint."""
+    positions: dict[str, tuple[str, float, float, float]] = {}
     raw = r.get("robot_ips")
     if not raw:
         return positions
@@ -219,7 +219,7 @@ def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[float, float, flo
             if resp.status_code == 200:
                 data = resp.json()
                 namespace = f"couliglig_bot_{domain_id}"
-                positions[namespace] = (float(data["y"]), float(data["x"]), float(data["yaw"]))
+                positions[namespace] = (str(data["rl_robot_type"]), float(data["x"]), float(data["y"]), float(data["yaw"]))
         except Exception as e:
             print(f"Error fetching position for robot at {ip}: {e}")
             continue
