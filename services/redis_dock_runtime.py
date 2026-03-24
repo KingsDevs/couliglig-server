@@ -209,13 +209,15 @@ def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[float, float, flo
         return positions
     for _, payload in robot_dict.items():
         ip = payload.get("ip") if isinstance(payload, dict) else payload
-        namespace = payload.get("namespace") if isinstance(payload, dict) else None
-        if not ip or not namespace:
+        domain_id = payload.get("domain_id") if isinstance(payload, dict) else None
+
+        if not ip or not domain_id:
             continue
         try:
             resp = requests.get(f"http://{ip}:8000/roslib/transform", timeout=3)
             if resp.status_code == 200:
                 data = resp.json()
+                namespace = f"couliglig_bot_{domain_id}"
                 positions[namespace] = (float(data["y"]), float(data["x"]), float(data["yaw"]))
         except Exception:
             continue
