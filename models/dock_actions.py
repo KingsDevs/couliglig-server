@@ -4,6 +4,7 @@ from definitions import DockType
 class AddItemRequest(BaseModel):
     dock_id: str
     item_id: str
+    item_weight: float | None = None  # Optional weight for the item being added
 
 
 class RemoveItemRequest(BaseModel):

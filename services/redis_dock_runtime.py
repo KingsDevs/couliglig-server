@@ -155,14 +155,6 @@ def get_all_dock_positions(r: redis.Redis) -> dict[str, tuple[float, float, floa
 # Item weights
 # ---------------------------------------------------------
 
-def set_item_weight(r: redis.Redis, item_id: str, weight: float) -> None:
-    r.set(f"item:weight:{item_id}", weight)
-
-
-def get_item_weight(r: redis.Redis, item_id: str) -> float | None:
-    val = r.get(f"item:weight:{item_id}")
-    return float(val) if val is not None else None
-
 
 def get_all_item_weights(r: redis.Redis) -> dict[str, float]:
     """Returns { item_id: weight } for all docks in docks:all that have an item with a weight."""
@@ -361,9 +353,6 @@ def add_item_to_pickup_dock(
         return False
 
     r.hset(key, mapping={"item_id": item_id, "item_weight": item_weight, "ts": int(time.time())})
-
-    if weight is not None:
-        set_item_weight(r, item_id, weight)
 
     return True
 

@@ -134,6 +134,14 @@
                 placeholder="Item ID"
               />
 
+              <input
+                id="add_item_weight"
+                class="form-control mb-2"
+                placeholder="Item Weight"
+                type="number"
+                step="0.01"
+              />
+
               <button class="btn btn-success w-100" onclick="addItem()">
                 Add Item
               </button>
@@ -298,6 +306,9 @@
         post("/dock/add-item", {
           dock_id: document.getElementById("add_item_dock").value,
           item_id: document.getElementById("add_item_id").value,
+          item_weight: document.getElementById("add_item_weight").value
+             ? parseFloat(document.getElementById("add_item_weight").value)
+             : undefined,
         });
       }
 

@@ -196,6 +196,7 @@ def add_item(request: AddItemRequest):
             redis_client,
             request.dock_id,
             request.item_id,
+            item_weight=request.item_weight if request.item_weight is not None else 1.0,  # default weight if not provided
         )
 
         if not success:
