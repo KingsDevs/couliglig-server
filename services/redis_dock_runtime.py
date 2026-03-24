@@ -281,18 +281,6 @@ def get_transporter_state(r: redis.Redis, agent_id: str) -> dict | None:
 # Waiting zone state
 # ---------------------------------------------------------
 
-def set_waiting_zone_state(
-    r: redis.Redis,
-    zone_id: str,
-    y: int,
-    x: int,
-    occupied: bool,
-) -> None:
-    r.hset(
-        f"wz:state:{zone_id}",
-        mapping={"x": x, "y": y, "occupied": int(occupied)},
-    )
-
 
 def get_waiting_zone_state(r: redis.Redis, zone_id: str) -> dict | None:
     data = r.hgetall(f"wz:state:{zone_id}")
@@ -307,22 +295,24 @@ def get_waiting_zone_state(r: redis.Redis, zone_id: str) -> dict | None:
 
 
 def get_all_waiting_zone_states(r: redis.Redis) -> list[dict]:
-    cursor = 0
+    """Returns all docks in docks:all whose dock_type is 'waiting_zone'."""
     zones: list[dict] = []
-    while True:
-        cursor, keys = r.scan(cursor=cursor, match="wz:state:*", count=500)
-        for key in keys:
-            zone_id = key.split("wz:state:")[1]
-            data = r.hgetall(key)
-            if data:
-                zones.append({
-                    "zone_id": zone_id,
-                    "x": int(data["x"]),
-                    "y": int(data["y"]),
-                    "occupied": bool(int(data.get("occupied", 0))),
-                })
-        if cursor == 0:
-            break
+    dock_ids = r.smembers("docks:all")
+    for dock_id in dock_ids:
+        dock_type_str = r.hget(f"dock_meta:{dock_id}", "dock_type")
+        if dock_type_str != "waiting_zone":
+            continue
+        data = r.hgetall(f"dock:{dock_type_str}:{dock_id}")
+        if not data:
+            continue
+        zones.append({
+            "zone_id":  dock_id,
+            "x":        float(data["x"]) if data.get("x") not in (None, "") else None,
+            "y":        float(data["y"]) if data.get("y") not in (None, "") else None,
+            "yaw":      float(data["yaw"]) if data.get("yaw") not in (None, "") else None,
+            "status":   data.get("status"),
+            "robot_id": data.get("robot_id"),
+        })
     return zones
 
 
@@ -334,8 +324,7 @@ def add_item_to_pickup_dock(
     r: redis.Redis,
     dock_id: str,
     item_id: str,
-    item_weight: float = 1.0,
-    weight: float | None = None,   # ← optionally register weight at add time
+    item_weight: float = 1.0
 ) -> bool:
     if not _check_if_dock_id_exists(r, dock_id):
         raise ValueError(f"Dock ID {dock_id} does not exist")
@@ -549,5 +538,5 @@ def get_obs_builder_inputs(
         # "transporter_loads":   transporter_loads,
         # "transporter_carried": transporter_carried,
         # "transporter_in_wz":   transporter_in_wz,
-        # "waiting_zones":       get_all_waiting_zone_states(r),
+        "waiting_zones":       get_all_waiting_zone_states(r),
     }
