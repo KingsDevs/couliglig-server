@@ -219,7 +219,8 @@ def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[float, float, flo
                 data = resp.json()
                 namespace = f"couliglig_bot_{domain_id}"
                 positions[namespace] = (float(data["y"]), float(data["x"]), float(data["yaw"]))
-        except Exception:
+        except Exception as e:
+            print(f"Error fetching position for robot at {ip}: {e}")
             continue
     return positions
 
