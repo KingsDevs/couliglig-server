@@ -1,6 +1,7 @@
 import json
 import time
 import redis
+import requests
 from schema import Dock
 from sqlalchemy.orm import Session
 from definitions import DockType, DockStatus
@@ -196,19 +197,28 @@ def get_robot_position(r: redis.Redis, agent_id: str) -> tuple[int, int] | None:
     return (int(data["y"]), int(data["x"]))
 
 
-def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[int, int]]:
-    """Returns { agent_id: (y, x) } for all known robots."""
-    cursor = 0
-    positions: dict[str, tuple[int, int]] = {}
-    while True:
-        cursor, keys = r.scan(cursor=cursor, match="robot:pos:*", count=500)
-        for key in keys:
-            agent_id = key.split("robot:pos:")[1]
-            data = r.hgetall(key)
-            if data:
-                positions[agent_id] = (int(data["y"]), int(data["x"]))
-        if cursor == 0:
-            break
+def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[float, float, float]]:
+    """Returns { namespace: (y, x, yaw) } for all registered robots by querying each robot's /roslib/transform endpoint."""
+    positions: dict[str, tuple[float, float, float]] = {}
+    raw = r.get("robot_ips")
+    if not raw:
+        return positions
+    try:
+        robot_dict = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return positions
+    for _, payload in robot_dict.items():
+        ip = payload.get("ip") if isinstance(payload, dict) else payload
+        namespace = payload.get("namespace") if isinstance(payload, dict) else None
+        if not ip or not namespace:
+            continue
+        try:
+            resp = requests.get(f"http://{ip}:8000/roslib/transform", timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                positions[namespace] = (float(data["y"]), float(data["x"]), float(data["yaw"]))
+        except Exception:
+            continue
     return positions
 
 
@@ -541,7 +551,7 @@ def get_obs_builder_inputs(
         "dock_states":         get_all_dock_states(r),
         "dock_positions":      get_all_dock_positions(r),
         "item_weights":        get_all_item_weights(r),
-        # "robot_positions":     get_all_robot_positions(r),
+        "robot_positions":     get_all_robot_positions(r),
         # "picker_has_item":     picker_has_item,
         # "transporter_loads":   transporter_loads,
         # "transporter_carried": transporter_carried,
