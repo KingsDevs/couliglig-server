@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from services.redis_dock_runtime import redis_client_from_env, get_obs_builder_inputs
 
-router = APIRouter(prefix="/obs", tags=["obs"])
+router = APIRouter(prefix="/rl", tags=["rl"])
 
 redis_client = redis_client_from_env()
 

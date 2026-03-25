@@ -26,7 +26,7 @@ from main import app
 from services.database import get_db_session
 import services.redis_dock_runtime as rdr
 import routes.docks as docks_route
-import routes.obs as obs_route
+import routes.rl as obs_route
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +352,7 @@ class TestDockStateQueries:
 
 
 # ===========================================================================
-# /obs/builder-inputs
+# /rl/builder-inputs
 # ===========================================================================
 
 class TestObsBuilderInputs:
@@ -388,7 +388,7 @@ class TestObsBuilderInputs:
         """With no active config, dock_states should be empty but endpoint returns 200."""
         with patch("services.redis_dock_runtime.requests.get") as mock_get:
             mock_get.return_value = MagicMock(status_code=404)
-            resp = client.get("/obs/builder-inputs")
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_1")
         assert resp.status_code == 200
         data = resp.json()
         assert data["dock_states"] == []
@@ -404,7 +404,7 @@ class TestObsBuilderInputs:
 
         with patch("services.redis_dock_runtime.requests.get") as mock_get:
             mock_get.return_value = MagicMock(status_code=404)
-            resp = client.get("/obs/builder-inputs")
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_1")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -450,7 +450,7 @@ class TestObsBuilderInputs:
             return MagicMock(status_code=404)
 
         with patch("services.redis_dock_runtime.requests.get", side_effect=side_effect):
-            resp = client.get("/obs/builder-inputs")
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_1")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -489,7 +489,7 @@ class TestObsBuilderInputs:
             return MagicMock(status_code=404)
 
         with patch("services.redis_dock_runtime.requests.get", side_effect=side_effect):
-            resp = client.get("/obs/builder-inputs")
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_2")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -512,7 +512,7 @@ class TestObsBuilderInputs:
             "services.redis_dock_runtime.requests.get",
             side_effect=Exception("Connection refused"),
         ):
-            resp = client.get("/obs/builder-inputs")
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_9")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -563,7 +563,7 @@ class TestRedisDockRuntimeUnit:
         assert zones[0]["y"] == pytest.approx(6.0)
 
     def test_get_all_robot_positions_empty_when_no_registrations(self, fake_redis):
-        positions = rdr.get_all_robot_positions(fake_redis)
+        positions = rdr.get_all_robot_positions(fake_redis, "couliglig_bot_1")
         assert positions == {}
 
     def test_get_all_robot_positions_calls_transform(self, fake_redis):
@@ -575,7 +575,7 @@ class TestRedisDockRuntimeUnit:
             json=MagicMock(return_value={"rl_robot_type": "picker", "x": 0.5, "y": 1.5, "yaw": 0.2}),
         )
         with patch("services.redis_dock_runtime.requests.get", return_value=mock_resp):
-            positions = rdr.get_all_robot_positions(fake_redis)
+            positions = rdr.get_all_robot_positions(fake_redis, "couliglig_bot_1")
 
         assert "couliglig_bot_1" in positions
         robot_type, x, y, yaw = positions["couliglig_bot_1"]

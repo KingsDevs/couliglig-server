@@ -2,4 +2,4 @@ from .robots import register_router
 from .docks import router as docks_router
 from .maps import router as maps_router
 from .actions import router as actions_router
-from .obs import router as obs_router
+from .rl import router as rl_router
