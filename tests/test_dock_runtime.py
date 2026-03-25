@@ -298,6 +298,21 @@ class TestDockActions:
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
 
+    def test_occupy_dock_without_reserve_returns_400(self, client, db_session, fake_redis):
+        """Cannot occupy a dock that has not been reserved first."""
+        _seed_config_and_docks(db_session, fake_redis)
+        resp = client.post("/dock/occupy", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["detail"].lower()
+
+    def test_occupy_dock_wrong_robot_returns_400(self, client, db_session, fake_redis):
+        """Cannot occupy a dock reserved by a different robot."""
+        _seed_config_and_docks(db_session, fake_redis)
+        client.post("/dock/reserve", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
+        resp = client.post("/dock/occupy", json={"dock_id": "dock_pickup_1", "robot_id": "robot_2"})
+        assert resp.status_code == 400
+        assert "robot_1" in resp.json()["detail"]
+
     def test_release_dock(self, client, db_session, fake_redis):
         _seed_config_and_docks(db_session, fake_redis)
         client.post("/dock/reserve", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})

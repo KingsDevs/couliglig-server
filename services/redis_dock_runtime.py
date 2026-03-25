@@ -388,8 +388,18 @@ def occupy_dock(r: redis.Redis, dock_id: str, robot_id: str) -> None:
         raise ValueError(f"Dock ID {dock_id} does not exist")
 
     dock_type = _get_dock_type_by_id(r, dock_id)
-    dock_key = _dock_key(dock_type, dock_id)
+    lock_key = _dock_lock_key(dock_type, dock_id)
 
+    # Guard: dock must be reserved by this robot before it can be occupied
+    lock_owner = r.get(lock_key)
+    if lock_owner is None:
+        raise ValueError(f"Dock {dock_id} has not been reserved — call reserve first")
+    if lock_owner != robot_id:
+        raise ValueError(
+            f"Dock {dock_id} is reserved by '{lock_owner}', not '{robot_id}'"
+        )
+
+    dock_key = _dock_key(dock_type, dock_id)
     r.hset(
         dock_key,
         mapping={
