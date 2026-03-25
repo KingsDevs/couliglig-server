@@ -566,7 +566,7 @@ def get_obs_builder_inputs(
         "dock_states":         get_all_dock_states(r),
         "dock_positions":      get_all_dock_positions(r),
         "item_weights":        get_all_item_weights(r),
-        "robot_positions":     get_all_robot_positions(r),
+        "robot_positions":     get_all_robot_positions(r, robot_id),
         "picker_has_item":     picker_has_item,
         "transporter_loads":   transporter_loads,
         "transporter_carried": transporter_carried,
