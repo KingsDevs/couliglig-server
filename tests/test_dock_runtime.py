@@ -612,3 +612,203 @@ class TestRedisDockRuntimeUnit:
         rdr.clear_all_dock_keys(fake_redis)
         assert fake_redis.get("active_dock_config") == "none"
         assert fake_redis.scard("docks:all") == 0
+
+
+# ===========================================================================
+# build_action_map  (unit tests)
+# ===========================================================================
+
+class TestBuildActionMap:
+
+    def test_action_map_item_slots_length(self, db_session, fake_redis):
+        """item_slots is always padded to MAX_ITEMS regardless of dock count."""
+        _seed_config_and_docks(db_session, fake_redis)
+        action_map = rdr.build_action_map(fake_redis, [])
+        assert len(action_map["item_slots"]) == rdr.RL_CONSTANTS["MAX_ITEMS"]
+
+    def test_action_map_wz_slots_length(self, db_session, fake_redis):
+        """wz_slots is always padded to MAX_WZ regardless of dock count."""
+        _seed_config_and_docks(db_session, fake_redis)
+        action_map = rdr.build_action_map(fake_redis, [])
+        assert len(action_map["wz_slots"]) == rdr.RL_CONSTANTS["MAX_WZ"]
+
+    def test_action_map_deterministic_ordering(self, db_session, fake_redis):
+        """Calling build_action_map twice gives the same slot order."""
+        _seed_config_and_docks(db_session, fake_redis)
+        map1 = rdr.build_action_map(fake_redis, [])
+        map2 = rdr.build_action_map(fake_redis, [])
+        assert map1 == map2
+
+    def test_action_map_item_slot_content(self, db_session, fake_redis):
+        """First item_slot matches the (only) pickup dock with correct fields."""
+        _seed_config_and_docks(db_session, fake_redis)
+        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_A", item_weight=2.5)
+        action_map = rdr.build_action_map(fake_redis, [])
+
+        slot = action_map["item_slots"][0]
+        assert slot is not None
+        assert slot["dock_id"] == "dock_pickup_1"
+        assert slot["item_id"] == "item_A"
+        assert slot["item_weight"] == pytest.approx(2.5)
+        assert slot["index"] == 0
+        assert slot["available_for_pickup"] is True
+
+    def test_action_map_empty_item_slot(self, db_session, fake_redis):
+        """Pickup dock without an item still appears with item_id='' and available_for_pickup=False."""
+        _seed_config_and_docks(db_session, fake_redis)
+        action_map = rdr.build_action_map(fake_redis, [])
+
+        slot = action_map["item_slots"][0]
+        assert slot is not None
+        assert slot["item_id"] == ""
+        assert slot["available_for_pickup"] is False
+
+    def test_action_map_padding_is_none(self, db_session, fake_redis):
+        """Slots beyond real dock count are None (padding)."""
+        _seed_config_and_docks(db_session, fake_redis)
+        action_map = rdr.build_action_map(fake_redis, [])
+        # Only 1 pickup dock, so index 1..MAX_ITEMS-1 should be None
+        assert action_map["item_slots"][1] is None
+        # Only 1 wz dock, so index 1..MAX_WZ-1 should be None
+        assert action_map["wz_slots"][1] is None
+
+    def test_action_map_wz_available_for_entry(self, db_session, fake_redis):
+        """WZ slot shows available_for_entry based on dock status."""
+        _seed_config_and_docks(db_session, fake_redis)
+        action_map = rdr.build_action_map(fake_redis, [])
+        wz = action_map["wz_slots"][0]
+        assert wz is not None
+        assert wz["dock_id"] == "dock_wz_1"
+        assert wz["available_for_entry"] is True
+
+    def test_action_map_wz_reserved_not_available(self, db_session, fake_redis):
+        """Reserving a WZ dock makes available_for_entry False."""
+        _seed_config_and_docks(db_session, fake_redis)
+        rdr.reserve_dock(fake_redis, "dock_wz_1", "robot_X")
+        action_map = rdr.build_action_map(fake_redis, [])
+        wz = action_map["wz_slots"][0]
+        assert wz["available_for_entry"] is False
+
+    def test_action_map_receiver_slots(self, db_session, fake_redis):
+        """Receiver docks appear in receiver_slots (unpadded)."""
+        _seed_config_and_docks(db_session, fake_redis)
+        action_map = rdr.build_action_map(fake_redis, [])
+        assert len(action_map["receiver_slots"]) == 1
+        assert action_map["receiver_slots"][0]["dock_id"] == "dock_receiver_1"
+        assert action_map["receiver_slots"][0]["index"] == 0
+
+    def test_action_map_robot_slots_from_agent_states(self, fake_redis):
+        """Robot slots are built from agent_states, sorted by namespace."""
+        agent_states = [
+            {"namespace": "couliglig_bot_2", "agent_type": "transporter"},
+            {"namespace": "couliglig_bot_1", "agent_type": "picker"},
+        ]
+        action_map = rdr.build_action_map(fake_redis, agent_states)
+        # picker
+        assert action_map["picker_slots"][0] is not None
+        assert action_map["picker_slots"][0]["namespace"] == "couliglig_bot_1"
+        assert action_map["picker_slots"][0]["index"] == 0
+        # transporter
+        assert action_map["transporter_slots"][0] is not None
+        assert action_map["transporter_slots"][0]["namespace"] == "couliglig_bot_2"
+        assert action_map["transporter_slots"][0]["index"] == 0
+
+    def test_action_map_robot_slots_padded(self, fake_redis):
+        """Robot slots are padded to MAX_PICKERS / MAX_TRANSPORTERS."""
+        action_map = rdr.build_action_map(fake_redis, [])
+        assert len(action_map["picker_slots"]) == rdr.RL_CONSTANTS["MAX_PICKERS"]
+        assert len(action_map["transporter_slots"]) == rdr.RL_CONSTANTS["MAX_TRANSPORTERS"]
+        assert all(s is None for s in action_map["picker_slots"])
+        assert all(s is None for s in action_map["transporter_slots"])
+
+    def test_action_map_empty_redis(self, fake_redis):
+        """With no docks at all, all slots are None / empty."""
+        action_map = rdr.build_action_map(fake_redis, [])
+        assert all(s is None for s in action_map["item_slots"])
+        assert all(s is None for s in action_map["wz_slots"])
+        assert action_map["receiver_slots"] == []
+
+
+# ===========================================================================
+# /rl/builder-inputs  –  action_map & rl_constants in response
+# ===========================================================================
+
+class TestBuilderInputsActionMap:
+
+    def test_response_contains_action_map(self, client, db_session, fake_redis):
+        """GET /rl/builder-inputs returns action_map key."""
+        _seed_config_and_docks(db_session, fake_redis)
+        with patch("services.redis_dock_runtime.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=404)
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_1")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "action_map" in data
+        assert "item_slots" in data["action_map"]
+        assert "wz_slots" in data["action_map"]
+        assert "receiver_slots" in data["action_map"]
+        assert "picker_slots" in data["action_map"]
+        assert "transporter_slots" in data["action_map"]
+
+    def test_response_contains_rl_constants(self, client, db_session, fake_redis):
+        """GET /rl/builder-inputs returns rl_constants with expected keys."""
+        _seed_config_and_docks(db_session, fake_redis)
+        with patch("services.redis_dock_runtime.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=404)
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_1")
+        assert resp.status_code == 200
+        consts = resp.json()["rl_constants"]
+        assert consts["MAX_ITEMS"] == 20
+        assert consts["MAX_WZ"] == 8
+        assert consts["MAX_PICKERS"] == 10
+        assert consts["MAX_TRANSPORTERS"] == 5
+        assert "PICKER_ACTION_DIM" in consts
+        assert "TRANSPORTER_ACTION_DIM" in consts
+        assert "NUM_PICKERS" in consts
+        assert "NUM_TRANSPORTERS" in consts
+
+    def test_rl_constants_dynamic_counts(self, client, db_session, fake_redis):
+        """NUM_PICKERS/NUM_TRANSPORTERS reflect live robot count."""
+        _seed_config_and_docks(db_session, fake_redis)
+        fake_redis.set("robot_ips", json.dumps({
+            "bot1": {"ip": "10.0.0.1", "ros_domain_id": 1, "namespace": "couliglig_bot_1"},
+            "bot2": {"ip": "10.0.0.2", "ros_domain_id": 2, "namespace": "couliglig_bot_2"},
+        }))
+
+        picker_rl = {"agent_id": "couliglig_bot_1", "agent_type": "picker", "has_item": False}
+        transporter_rl = {
+            "agent_id": "couliglig_bot_2", "agent_type": "transporter",
+            "capacity": 0, "max_capacity": 4, "carried_items": [], "in_waiting_zone": False,
+        }
+
+        def side_effect(url, timeout=3):
+            if url.endswith("/rl") and "10.0.0.1" in url:
+                return MagicMock(status_code=200, json=MagicMock(return_value=picker_rl))
+            if url.endswith("/rl") and "10.0.0.2" in url:
+                return MagicMock(status_code=200, json=MagicMock(return_value=transporter_rl))
+            return MagicMock(status_code=404)
+
+        with patch("services.redis_dock_runtime.requests.get", side_effect=side_effect):
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_1")
+
+        consts = resp.json()["rl_constants"]
+        assert consts["NUM_PICKERS"] == 1
+        assert consts["NUM_TRANSPORTERS"] == 1
+        # PICKER_ACTION_DIM = 1 + MAX_ITEMS + num_transporters
+        assert consts["PICKER_ACTION_DIM"] == 1 + 20 + 1
+
+    def test_action_map_item_slot_matches_dock(self, client, db_session, fake_redis):
+        """item_slots[0] dock_id corresponds to the pickup dock in Redis."""
+        _seed_config_and_docks(db_session, fake_redis)
+        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_99", item_weight=7.0)
+
+        with patch("services.redis_dock_runtime.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=404)
+            resp = client.get("/rl/builder-inputs?robot_id=couliglig_bot_1")
+
+        am = resp.json()["action_map"]
+        slot = am["item_slots"][0]
+        assert slot["dock_id"] == "dock_pickup_1"
+        assert slot["item_id"] == "item_99"
+        assert slot["item_weight"] == pytest.approx(7.0)
+        assert slot["available_for_pickup"] is True

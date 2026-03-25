@@ -7,6 +7,18 @@ from sqlalchemy.orm import Session
 from definitions import DockType, DockStatus
 
 
+# ---------------------------------------------------------
+# RL constants  (single source of truth for server + robots)
+# ---------------------------------------------------------
+
+RL_CONSTANTS = {
+    "MAX_ITEMS": 20,
+    "MAX_WZ": 8,
+    "MAX_PICKERS": 10,
+    "MAX_TRANSPORTERS": 5,
+}
+
+
 def redis_client_from_env() -> redis.Redis:
     import os
     host = os.getenv("REDIS_HOST", "localhost")
@@ -178,16 +190,6 @@ def get_all_item_weights(r: redis.Redis) -> dict[str, float]:
 # Robot positions
 # ---------------------------------------------------------
 
-def set_robot_position(r: redis.Redis, agent_id: str, y: int, x: int) -> None:
-    r.hset(f"robot:pos:{agent_id}", mapping={"x": x, "y": y})
-
-
-def get_robot_position(r: redis.Redis, agent_id: str) -> tuple[int, int] | None:
-    data = r.hgetall(f"robot:pos:{agent_id}")
-    if not data:
-        return None
-    return (int(data["y"]), int(data["x"]))
-
 
 def get_all_robot_positions(r: redis.Redis, robot_id: str) -> dict[str, tuple[str, float, float, float]]:
     """Returns { namespace: (robot_type, x, y, yaw) } for all registered robots by querying each robot's /roslib/transform endpoint."""
@@ -224,15 +226,6 @@ def get_all_robot_positions(r: redis.Redis, robot_id: str) -> dict[str, tuple[st
 # ---------------------------------------------------------
 # Robot state  (picker / transporter runtime)
 # ---------------------------------------------------------
-
-def set_picker_state(r: redis.Redis, agent_id: str, has_item: bool) -> None:
-    r.hset(
-        f"robot:state:{agent_id}",
-        mapping={
-            "agent_type": "picker",
-            "has_item": int(has_item),
-        },
-    )
 
 
 def set_transporter_state(
@@ -283,18 +276,6 @@ def get_transporter_state(r: redis.Redis, agent_id: str) -> dict | None:
 # ---------------------------------------------------------
 # Waiting zone state
 # ---------------------------------------------------------
-
-
-def get_waiting_zone_state(r: redis.Redis, zone_id: str) -> dict | None:
-    data = r.hgetall(f"wz:state:{zone_id}")
-    if not data:
-        return None
-    return {
-        "zone_id": zone_id,
-        "x": int(data["x"]),
-        "y": int(data["y"]),
-        "occupied": bool(int(data.get("occupied", 0))),
-    }
 
 
 def get_all_waiting_zone_states(r: redis.Redis) -> list[dict]:
@@ -487,6 +468,148 @@ def get_all_dock_states(r: redis.Redis) -> list[dict]:
 
 
 # ---------------------------------------------------------
+# Action map  (deterministic index ↔ entity mapping)
+# ---------------------------------------------------------
+
+def build_action_map(r: redis.Redis, agent_states: list[dict]) -> dict:
+    """Build a deterministic, padded index→entity mapping for RL action decoding.
+
+    The robot fetches this alongside observations so it can translate a discrete
+    action integer back into a concrete dock/item/peer ID, then call the existing
+    /dock/reserve, /dock/occupy, /dock/release endpoints directly.
+
+    Slot ordering is alphabetically sorted by dock_id / namespace so indices are
+    stable across calls as long as the dock configuration does not change.
+
+    Parameters
+    ----------
+    r : redis.Redis
+        Active Redis connection.
+    agent_states : list[dict]
+        Already-fetched list from ``_fetch_all_agent_states`` so we avoid a
+        second HTTP round-trip to the robots.  Each dict must contain at least
+        ``namespace`` and ``agent_type``.
+
+    Returns
+    -------
+    dict with keys:
+        item_slots        – list[dict|None], length MAX_ITEMS
+        wz_slots          – list[dict|None], length MAX_WZ
+        receiver_slots    – list[dict]       (unpadded, delivery lookup only)
+        picker_slots      – list[dict|None], length MAX_PICKERS
+        transporter_slots – list[dict|None], length MAX_TRANSPORTERS
+    """
+    MAX_ITEMS = RL_CONSTANTS["MAX_ITEMS"]
+    MAX_WZ = RL_CONSTANTS["MAX_WZ"]
+    MAX_PICKERS = RL_CONSTANTS["MAX_PICKERS"]
+    MAX_TRANSPORTERS = RL_CONSTANTS["MAX_TRANSPORTERS"]
+
+    dock_ids = sorted(r.smembers("docks:all"))
+
+    # ---- classify docks by type ----
+    raw_items: list[dict] = []
+    raw_wzs: list[dict] = []
+    raw_receivers: list[dict] = []
+
+    for dock_id in dock_ids:
+        dock_type_str = r.hget(f"dock_meta:{dock_id}", "dock_type")
+        if dock_type_str is None:
+            continue
+        data = r.hgetall(f"dock:{dock_type_str}:{dock_id}")
+        if not data:
+            continue
+
+        entry = {
+            "dock_id": dock_id,
+            "dock_type": dock_type_str,
+            "status": data.get("status", ""),
+            "robot_id": data.get("robot_id", ""),
+            "x": float(data["x"]) if data.get("x") not in (None, "") else None,
+            "y": float(data["y"]) if data.get("y") not in (None, "") else None,
+            "yaw": float(data["yaw"]) if data.get("yaw") not in (None, "") else None,
+        }
+
+        if dock_type_str == DockType.PICKUP.value:
+            entry["item_id"] = data.get("item_id", "")
+            entry["item_weight"] = (
+                float(data["item_weight"])
+                if data.get("item_weight") not in (None, "")
+                else None
+            )
+            entry["available_for_pickup"] = (
+                bool(entry["item_id"])
+                and entry["status"] == DockStatus.available.value
+            )
+            raw_items.append(entry)
+
+        elif dock_type_str == DockType.WAITING_ZONE.value:
+            entry["available_for_entry"] = (
+                entry["status"] == DockStatus.available.value
+            )
+            raw_wzs.append(entry)
+
+        elif dock_type_str == DockType.RECEIVER.value:
+            raw_receivers.append(entry)
+
+    # ---- pad item_slots to MAX_ITEMS ----
+    item_slots: list[dict | None] = []
+    for i, entry in enumerate(raw_items[:MAX_ITEMS]):
+        entry["index"] = i
+        item_slots.append(entry)
+    while len(item_slots) < MAX_ITEMS:
+        item_slots.append(None)
+
+    # ---- pad wz_slots to MAX_WZ ----
+    wz_slots: list[dict | None] = []
+    for i, entry in enumerate(raw_wzs[:MAX_WZ]):
+        entry["index"] = i
+        wz_slots.append(entry)
+    while len(wz_slots) < MAX_WZ:
+        wz_slots.append(None)
+
+    # ---- receiver_slots (unpadded, for delivery target lookup) ----
+    receiver_slots: list[dict] = []
+    for i, entry in enumerate(raw_receivers):
+        entry["index"] = i
+        receiver_slots.append(entry)
+
+    # ---- robot slots from agent_states ----
+    pickers: list[dict] = []
+    transporters: list[dict] = []
+    for state in sorted(agent_states, key=lambda s: s.get("namespace", "")):
+        ns = state.get("namespace", "")
+        agent_type = state.get("agent_type", "")
+        slot = {"namespace": ns, "agent_type": agent_type}
+
+        if agent_type == "picker":
+            pickers.append(slot)
+        elif agent_type == "transporter":
+            transporters.append(slot)
+
+    picker_slots: list[dict | None] = []
+    for i, s in enumerate(pickers[:MAX_PICKERS]):
+        s["index"] = i
+        picker_slots.append(s)
+    while len(picker_slots) < MAX_PICKERS:
+        picker_slots.append(None)
+
+    transporter_slots: list[dict | None] = []
+    for i, s in enumerate(transporters[:MAX_TRANSPORTERS]):
+        s["index"] = i
+        transporter_slots.append(s)
+    while len(transporter_slots) < MAX_TRANSPORTERS:
+        transporter_slots.append(None)
+
+    return {
+        "item_slots": item_slots,
+        "wz_slots": wz_slots,
+        "receiver_slots": receiver_slots,
+        "picker_slots": picker_slots,
+        "transporter_slots": transporter_slots,
+    }
+
+
+# ---------------------------------------------------------
 # Convenience: single call to feed obs_builder
 # ---------------------------------------------------------
 
@@ -541,6 +664,8 @@ def get_obs_builder_inputs(
         "transporter_carried": dict[str, list[str]],
         "transporter_in_wz"  : dict[str, bool],
         "waiting_zones"      : list[dict],
+        "action_map"         : dict  (from build_action_map),
+        "rl_constants"       : dict  (MAX_ITEMS, MAX_WZ, dims, live counts),
     }
     """
     agent_states = _fetch_all_agent_states(r, robot_id)
@@ -562,6 +687,20 @@ def get_obs_builder_inputs(
             transporter_carried[ns] = list(state.get("carried_items", []))
             transporter_in_wz[ns]   = bool(state.get("in_waiting_zone", False))
 
+    # ---- action map (reuse agent_states, no extra HTTP calls) ----
+    action_map = build_action_map(r, agent_states)
+
+    num_pickers = sum(1 for s in action_map["picker_slots"] if s is not None)
+    num_transporters = sum(1 for s in action_map["transporter_slots"] if s is not None)
+
+    rl_constants = {
+        **RL_CONSTANTS,
+        "PICKER_ACTION_DIM": 1 + RL_CONSTANTS["MAX_ITEMS"] + num_transporters,
+        "TRANSPORTER_ACTION_DIM": 1 + RL_CONSTANTS["MAX_WZ"] + RL_CONSTANTS["MAX_ITEMS"],
+        "NUM_PICKERS": num_pickers,
+        "NUM_TRANSPORTERS": num_transporters,
+    }
+
     return {
         "dock_states":         get_all_dock_states(r),
         "dock_positions":      get_all_dock_positions(r),
@@ -572,4 +711,6 @@ def get_obs_builder_inputs(
         "transporter_carried": transporter_carried,
         "transporter_in_wz":   transporter_in_wz,
         "waiting_zones":       get_all_waiting_zone_states(r),
+        "action_map":          action_map,
+        "rl_constants":        rl_constants,
     }
