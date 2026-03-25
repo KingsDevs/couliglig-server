@@ -487,22 +487,48 @@ def get_all_dock_states(r: redis.Redis) -> list[dict]:
 # Convenience: single call to feed obs_builder
 # ---------------------------------------------------------
 
+def _fetch_all_agent_states(r: redis.Redis) -> list[dict]:
+    """Call GET /rl on every registered robot and return the list of responses."""
+    raw = r.get("robot_ips")
+    if not raw:
+        return []
+    try:
+        robot_dict = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    states: list[dict] = []
+    for _, payload in robot_dict.items():
+        ip = payload.get("ip") if isinstance(payload, dict) else payload
+        domain_id = payload.get("ros_domain_id") if isinstance(payload, dict) else None
+        if not ip or domain_id is None:
+            continue
+        try:
+            resp = requests.get(f"http://{ip}:8000/rl", timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                data["namespace"] = f"couliglig_bot_{domain_id}"
+                states.append(data)
+        except Exception as e:
+            print(f"Error fetching /rl for robot at {ip}: {e}")
+            continue
+    return states
+
+
 def get_obs_builder_inputs(
-    r: redis.Redis,
-    picker_ids: list[str],
-    transporter_ids: list[str],
+    r: redis.Redis
 ) -> dict:
     """
-    Fetches all live runtime data from Redis and returns a dict
-    that maps directly to obs_context_from_server_state() parameters.
+    Fetches all live runtime data from Redis (and robot endpoints) and
+    returns a dict that maps directly to obs_context_from_server_state() parameters.
 
     Returns
     -------
     {
         "dock_states"        : list[dict],
-        "dock_positions"     : dict[str, tuple[int,int]],
+        "dock_positions"     : dict[str, tuple[float,float,float]],
         "item_weights"       : dict[str, float],
-        "robot_positions"    : dict[str, tuple[int,int]],
+        "robot_positions"    : dict[str, tuple[str,float,float,float]],
         "picker_has_item"    : dict[str, bool],
         "transporter_loads"  : dict[str, tuple[float,float]],
         "transporter_carried": dict[str, list[str]],
@@ -510,33 +536,33 @@ def get_obs_builder_inputs(
         "waiting_zones"      : list[dict],
     }
     """
-    # picker_has_item: dict[str, bool] = {}
-    # for pid in picker_ids:
-    #     state = get_picker_state(r, pid)
-    #     picker_has_item[pid] = state["has_item"] if state else False
+    agent_states = _fetch_all_agent_states(r)
 
-    # transporter_loads:   dict[str, tuple[float, float]] = {}
-    # transporter_carried: dict[str, list[str]]           = {}
-    # transporter_in_wz:   dict[str, bool]                = {}
-    # for tid in transporter_ids:
-    #     state = get_transporter_state(r, tid)
-    #     if state:
-    #         transporter_loads[tid]   = (state["capacity"], state["max_capacity"])
-    #         transporter_carried[tid] = state["carried_items"]
-    #         transporter_in_wz[tid]   = state["in_waiting_zone"]
-    #     else:
-    #         transporter_loads[tid]   = (0.0, 1.0)
-    #         transporter_carried[tid] = []
-    #         transporter_in_wz[tid]   = False
+    picker_has_item:     dict[str, bool]               = {}
+    transporter_loads:   dict[str, tuple[float, float]] = {}
+    transporter_carried: dict[str, list[str]]           = {}
+    transporter_in_wz:   dict[str, bool]                = {}
+
+    for state in agent_states:
+        ns = state.get("namespace", state.get("agent_id", "unknown"))
+        agent_type = state.get("agent_type")
+
+        if agent_type == "picker":
+            picker_has_item[ns] = bool(state.get("has_item", False))
+
+        elif agent_type == "transporter":
+            transporter_loads[ns]   = (float(state.get("capacity", 0.0)), float(state.get("max_capacity", 1.0)))
+            transporter_carried[ns] = list(state.get("carried_items", []))
+            transporter_in_wz[ns]   = bool(state.get("in_waiting_zone", False))
 
     return {
         "dock_states":         get_all_dock_states(r),
         "dock_positions":      get_all_dock_positions(r),
         "item_weights":        get_all_item_weights(r),
         "robot_positions":     get_all_robot_positions(r),
-        # "picker_has_item":     picker_has_item,
-        # "transporter_loads":   transporter_loads,
-        # "transporter_carried": transporter_carried,
-        # "transporter_in_wz":   transporter_in_wz,
+        "picker_has_item":     picker_has_item,
+        "transporter_loads":   transporter_loads,
+        "transporter_carried": transporter_carried,
+        "transporter_in_wz":   transporter_in_wz,
         "waiting_zones":       get_all_waiting_zone_states(r),
     }

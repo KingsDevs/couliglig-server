@@ -13,6 +13,6 @@ def obs_builder_inputs():
     dock states, dock positions (y, x, yaw), and any other active runtime fields.
     """
     try:
-        return get_obs_builder_inputs(redis_client, picker_ids=[], transporter_ids=[])
+        return get_obs_builder_inputs(redis_client)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
