@@ -211,7 +211,7 @@ def get_all_robot_positions(r: redis.Redis, robot_id: str) -> dict[str, tuple[st
             if resp.status_code == 200:
                 data = resp.json()
                 namespace = f"couliglig_bot_{domain_id}"
-                if namespace != robot_id:
+                if namespace == robot_id:
                     continue
 
                 positions[namespace] = (str(data["rl_robot_type"]), float(data["x"]), float(data["y"]), float(data["yaw"]))
@@ -511,7 +511,7 @@ def _fetch_all_agent_states(r: redis.Redis, robot_id: str) -> list[dict]:
             if resp.status_code == 200:
                 data = resp.json()
                 data["namespace"] = f"couliglig_bot_{domain_id}"
-                if data["namespace"] != robot_id:
+                if data["namespace"] == robot_id:
                     continue
                 
                 states.append(data)
