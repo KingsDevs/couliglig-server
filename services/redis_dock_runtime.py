@@ -189,7 +189,7 @@ def get_robot_position(r: redis.Redis, agent_id: str) -> tuple[int, int] | None:
     return (int(data["y"]), int(data["x"]))
 
 
-def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[str, float, float, float]]:
+def get_all_robot_positions(r: redis.Redis, robot_id: str) -> dict[str, tuple[str, float, float, float]]:
     """Returns { namespace: (robot_type, x, y, yaw) } for all registered robots by querying each robot's /roslib/transform endpoint."""
     positions: dict[str, tuple[str, float, float, float]] = {}
     raw = r.get("robot_ips")
@@ -211,6 +211,9 @@ def get_all_robot_positions(r: redis.Redis) -> dict[str, tuple[str, float, float
             if resp.status_code == 200:
                 data = resp.json()
                 namespace = f"couliglig_bot_{domain_id}"
+                if namespace != robot_id:
+                    continue
+
                 positions[namespace] = (str(data["rl_robot_type"]), float(data["x"]), float(data["y"]), float(data["yaw"]))
         except Exception as e:
             print(f"Error fetching position for robot at {ip}: {e}")
@@ -487,7 +490,7 @@ def get_all_dock_states(r: redis.Redis) -> list[dict]:
 # Convenience: single call to feed obs_builder
 # ---------------------------------------------------------
 
-def _fetch_all_agent_states(r: redis.Redis) -> list[dict]:
+def _fetch_all_agent_states(r: redis.Redis, robot_id: str) -> list[dict]:
     """Call GET /rl on every registered robot and return the list of responses."""
     raw = r.get("robot_ips")
     if not raw:
@@ -508,6 +511,9 @@ def _fetch_all_agent_states(r: redis.Redis) -> list[dict]:
             if resp.status_code == 200:
                 data = resp.json()
                 data["namespace"] = f"couliglig_bot_{domain_id}"
+                if data["namespace"] != robot_id:
+                    continue
+                
                 states.append(data)
         except Exception as e:
             print(f"Error fetching /rl for robot at {ip}: {e}")
@@ -516,7 +522,8 @@ def _fetch_all_agent_states(r: redis.Redis) -> list[dict]:
 
 
 def get_obs_builder_inputs(
-    r: redis.Redis
+    r: redis.Redis,
+    robot_id: str,
 ) -> dict:
     """
     Fetches all live runtime data from Redis (and robot endpoints) and
@@ -536,7 +543,7 @@ def get_obs_builder_inputs(
         "waiting_zones"      : list[dict],
     }
     """
-    agent_states = _fetch_all_agent_states(r)
+    agent_states = _fetch_all_agent_states(r, robot_id)
 
     picker_has_item:     dict[str, bool]               = {}
     transporter_loads:   dict[str, tuple[float, float]] = {}
