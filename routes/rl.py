@@ -1,6 +1,10 @@
 import random
 import time
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from services.database import get_db_session
+from schema import DockConfig, Dock
+from definitions import DockType
 from services.redis_dock_runtime import redis_client_from_env, get_obs_builder_inputs, RL_CONSTANTS
 
 router = APIRouter(prefix="/rl", tags=["rl"])
@@ -23,9 +27,7 @@ def obs_builder_inputs(robot_id: str):
 @router.get("/builder-inputs/dummy")
 def obs_builder_inputs_dummy(
     robot_id: str,
-    num_items: int = 5,
-    num_wz: int = 3,
-    num_receivers: int = 3,
+    dock_config_id: int,
     num_pickers: int = 2,
     num_transporters: int = 2,
     # --- scenario control flags ---
@@ -38,10 +40,12 @@ def obs_builder_inputs_dummy(
     transporters_empty: bool = False,    # all transporters: capacity=0, carried_items=[]
     transporters_in_wz: bool = False,    # all transporters: in_waiting_zone=True
     transporters_not_in_wz: bool = False,  # all transporters: in_waiting_zone=False
+    db: Session = Depends(get_db_session),
 ):
     """
-    Returns randomly generated builder inputs for testing — no Redis required.
-    All counts are capped by RL_CONSTANTS maximums.
+    Returns randomly generated builder inputs for testing — no live Redis required.
+    Docks are loaded from the given dock_config_id in the database; positions come
+    from the DB records (x, y, theta).  Robot state is randomised.
 
     Scenario flags (stackable):
     - all_items_available: every pickup dock has an item and is available to pick up
@@ -52,22 +56,26 @@ def obs_builder_inputs_dummy(
     - transporters_empty: transporters carry nothing
     - transporters_in_wz / transporters_not_in_wz: override transporter WZ state
     """
+    # ---- load docks from DB ----
+    config = db.query(DockConfig).filter(DockConfig.id == dock_config_id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail=f"dock_config_id {dock_config_id} not found")
+
+    db_docks = db.query(Dock).filter(Dock.config_id == dock_config_id).all()
+    if not db_docks:
+        raise HTTPException(status_code=404, detail=f"No docks found for dock_config_id {dock_config_id}")
+
     rng = random.Random()
 
-    MAX_ITEMS       = RL_CONSTANTS["MAX_ITEMS"]
-    MAX_WZ          = RL_CONSTANTS["MAX_WZ"]
-    MAX_PICKERS     = RL_CONSTANTS["MAX_PICKERS"]
+    MAX_ITEMS        = RL_CONSTANTS["MAX_ITEMS"]
+    MAX_WZ           = RL_CONSTANTS["MAX_WZ"]
+    MAX_PICKERS      = RL_CONSTANTS["MAX_PICKERS"]
     MAX_TRANSPORTERS = RL_CONSTANTS["MAX_TRANSPORTERS"]
 
-    num_items        = min(num_items,        MAX_ITEMS)
-    num_wz           = min(num_wz,           MAX_WZ)
     num_pickers      = min(num_pickers,      MAX_PICKERS)
     num_transporters = min(num_transporters, MAX_TRANSPORTERS)
 
     statuses = ["available", "reserved", "occupied"]
-
-    def rand_pose():
-        return round(rng.uniform(-10, 10), 3), round(rng.uniform(-10, 10), 3), round(rng.uniform(-3.14, 3.14), 4)
 
     # ---- robots (built first so dock robot_id draws from real namespaces) ----
     # Guarantee robot_id is always in the pool by placing it as the first picker.
@@ -83,41 +91,45 @@ def obs_builder_inputs_dummy(
     ][:num_transporters]
     all_robot_ns = picker_ns + transporter_ns
 
-    # ---- docks ----
-    pickup_ids   = [f"pickup_{i}" for i in range(num_items)]
-    wz_ids       = [f"wz_{i}"     for i in range(num_wz)]
-    receiver_ids = [f"recv_{i}"   for i in range(num_receivers)]
-    item_ids     = [f"item_{i}"   for i in range(num_items)]
+    # ---- classify docks from DB ----
+    pickup_docks   = [d for d in db_docks if d.dock_type == DockType.PICKUP]
+    wz_docks       = [d for d in db_docks if d.dock_type == DockType.WAITING_ZONE]
+    receiver_docks = [d for d in db_docks if d.dock_type == DockType.RECEIVER]
 
-    dock_states = []
+    receiver_ids = [d.dock_id for d in receiver_docks]
+    item_ids     = [f"item_{i}" for i in range(len(pickup_docks))]
+
+    dock_states    = []
     dock_positions = {}
 
-    for i, did in enumerate(pickup_ids):
-        x, y, yaw = rand_pose()
+    for i, d in enumerate(pickup_docks):
+        x   = d.x     if d.x     is not None else 0.0
+        y   = d.y     if d.y     is not None else 0.0
+        yaw = d.theta if d.theta is not None else 0.0
         has_item = True if all_items_available else rng.random() > 0.4
         if all_items_available or no_docked_robots:
             status = "available"
-        else:
-            status = rng.choice(statuses)
-        if all_items_available or no_docked_robots:
             assigned_robot = ""
         else:
+            status = rng.choice(statuses)
             assigned_robot = rng.choice(all_robot_ns) if status != "available" and all_robot_ns else ""
         dock_states.append({
             "dock_type": "pickup",
-            "dock_id": did,
+            "dock_id": d.dock_id,
             "x": str(x), "y": str(y), "yaw": str(yaw),
             "status": status,
             "robot_id": assigned_robot,
             "item_id": item_ids[i] if has_item else "",
             "item_weight": str(rng.randint(1, 4)) if has_item else "",
-            "receiver_dock_id": rng.choice(receiver_ids) if has_item else "",
+            "receiver_dock_id": rng.choice(receiver_ids) if has_item and receiver_ids else "",
             "ts": str(int(time.time())),
         })
-        dock_positions[did] = (x, y, yaw)
+        dock_positions[d.dock_id] = (x, y, yaw)
 
-    for did in wz_ids:
-        x, y, yaw = rand_pose()
+    for d in wz_docks:
+        x   = d.x     if d.x     is not None else 0.0
+        y   = d.y     if d.y     is not None else 0.0
+        yaw = d.theta if d.theta is not None else 0.0
         if all_wz_available or no_docked_robots:
             status = "available"
             assigned_robot = ""
@@ -126,17 +138,19 @@ def obs_builder_inputs_dummy(
             assigned_robot = rng.choice(all_robot_ns) if status != "available" and all_robot_ns else ""
         dock_states.append({
             "dock_type": "waiting_zone",
-            "dock_id": did,
+            "dock_id": d.dock_id,
             "x": str(x), "y": str(y), "yaw": str(yaw),
             "status": status,
             "robot_id": assigned_robot,
             "item_id": "", "item_weight": "", "receiver_dock_id": "",
             "ts": str(int(time.time())),
         })
-        dock_positions[did] = (x, y, yaw)
+        dock_positions[d.dock_id] = (x, y, yaw)
 
-    for did in receiver_ids:
-        x, y, yaw = rand_pose()
+    for d in receiver_docks:
+        x   = d.x     if d.x     is not None else 0.0
+        y   = d.y     if d.y     is not None else 0.0
+        yaw = d.theta if d.theta is not None else 0.0
         if all_receivers_available or no_docked_robots:
             status = "available"
             assigned_robot = ""
@@ -145,14 +159,14 @@ def obs_builder_inputs_dummy(
             assigned_robot = rng.choice(all_robot_ns) if status != "available" and all_robot_ns else ""
         dock_states.append({
             "dock_type": "receiver",
-            "dock_id": did,
+            "dock_id": d.dock_id,
             "x": str(x), "y": str(y), "yaw": str(yaw),
             "status": status,
             "robot_id": assigned_robot,
             "item_id": "", "item_weight": "", "receiver_dock_id": "",
             "ts": str(int(time.time())),
         })
-        dock_positions[did] = (x, y, yaw)
+        dock_positions[d.dock_id] = (x, y, yaw)
 
     # ---- item weights & receiver docks ----
     item_weights = {}
@@ -164,6 +178,9 @@ def obs_builder_inputs_dummy(
             item_receiver_docks[ds["item_id"]] = ds["receiver_dock_id"]
 
     # ---- robots ----
+    def rand_pose():
+        return round(rng.uniform(-10, 10), 3), round(rng.uniform(-10, 10), 3), round(rng.uniform(-3.14, 3.14), 4)
+
     robot_positions = {}
     for ns in picker_ns:
         x, y, yaw = rand_pose()
@@ -195,7 +212,7 @@ def obs_builder_inputs_dummy(
 
     # ---- waiting zones ----
     waiting_zones = []
-    for did in wz_ids:
+    for did in [d.dock_id for d in wz_docks]:
         x, y, yaw = dock_positions[did]
         status = next(ds["status"] for ds in dock_states if ds["dock_id"] == did)
         waiting_zones.append({
