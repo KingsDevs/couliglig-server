@@ -28,10 +28,29 @@ def obs_builder_inputs_dummy(
     num_receivers: int = 3,
     num_pickers: int = 2,
     num_transporters: int = 2,
+    # --- scenario control flags ---
+    all_items_available: bool = False,   # all pickup docks: has item + status=available, no robot
+    no_docked_robots: bool = False,      # all docks: status=available, robot_id=""
+    all_wz_available: bool = False,      # all waiting zones: status=available, robot_id=""
+    all_receivers_available: bool = False,  # all receivers: status=available, robot_id=""
+    pickers_have_item: bool = False,     # all pickers: has_item=True
+    pickers_no_item: bool = False,       # all pickers: has_item=False
+    transporters_empty: bool = False,    # all transporters: capacity=0, carried_items=[]
+    transporters_in_wz: bool = False,    # all transporters: in_waiting_zone=True
+    transporters_not_in_wz: bool = False,  # all transporters: in_waiting_zone=False
 ):
     """
     Returns randomly generated builder inputs for testing — no Redis required.
     All counts are capped by RL_CONSTANTS maximums.
+
+    Scenario flags (stackable):
+    - all_items_available: every pickup dock has an item and is available to pick up
+    - no_docked_robots: no dock has a robot assigned (all docks available)
+    - all_wz_available: all waiting zones are free
+    - all_receivers_available: all receiver docks are free
+    - pickers_have_item / pickers_no_item: override picker item state
+    - transporters_empty: transporters carry nothing
+    - transporters_in_wz / transporters_not_in_wz: override transporter WZ state
     """
     rng = random.Random()
 
@@ -75,14 +94,21 @@ def obs_builder_inputs_dummy(
 
     for i, did in enumerate(pickup_ids):
         x, y, yaw = rand_pose()
-        has_item = rng.random() > 0.4
-        status = rng.choice(statuses)
+        has_item = True if all_items_available else rng.random() > 0.4
+        if all_items_available or no_docked_robots:
+            status = "available"
+        else:
+            status = rng.choice(statuses)
+        if all_items_available or no_docked_robots:
+            assigned_robot = ""
+        else:
+            assigned_robot = rng.choice(all_robot_ns) if status != "available" and all_robot_ns else ""
         dock_states.append({
             "dock_type": "pickup",
             "dock_id": did,
             "x": str(x), "y": str(y), "yaw": str(yaw),
             "status": status,
-            "robot_id": rng.choice(all_robot_ns) if status != "available" and all_robot_ns else "",
+            "robot_id": assigned_robot,
             "item_id": item_ids[i] if has_item else "",
             "item_weight": str(rng.randint(1, 4)) if has_item else "",
             "receiver_dock_id": rng.choice(receiver_ids) if has_item else "",
@@ -92,13 +118,18 @@ def obs_builder_inputs_dummy(
 
     for did in wz_ids:
         x, y, yaw = rand_pose()
-        status = rng.choice(statuses)
+        if all_wz_available or no_docked_robots:
+            status = "available"
+            assigned_robot = ""
+        else:
+            status = rng.choice(statuses)
+            assigned_robot = rng.choice(all_robot_ns) if status != "available" and all_robot_ns else ""
         dock_states.append({
             "dock_type": "waiting_zone",
             "dock_id": did,
             "x": str(x), "y": str(y), "yaw": str(yaw),
             "status": status,
-            "robot_id": rng.choice(all_robot_ns) if status != "available" and all_robot_ns else "",
+            "robot_id": assigned_robot,
             "item_id": "", "item_weight": "", "receiver_dock_id": "",
             "ts": str(int(time.time())),
         })
@@ -106,13 +137,18 @@ def obs_builder_inputs_dummy(
 
     for did in receiver_ids:
         x, y, yaw = rand_pose()
-        status = rng.choice(statuses)
+        if all_receivers_available or no_docked_robots:
+            status = "available"
+            assigned_robot = ""
+        else:
+            status = rng.choice(statuses)
+            assigned_robot = rng.choice(all_robot_ns) if status != "available" and all_robot_ns else ""
         dock_states.append({
             "dock_type": "receiver",
             "dock_id": did,
             "x": str(x), "y": str(y), "yaw": str(yaw),
             "status": status,
-            "robot_id": rng.choice(all_robot_ns) if status != "available" and all_robot_ns else "",
+            "robot_id": assigned_robot,
             "item_id": "", "item_weight": "", "receiver_dock_id": "",
             "ts": str(int(time.time())),
         })
@@ -136,10 +172,26 @@ def obs_builder_inputs_dummy(
         x, y, yaw = rand_pose()
         robot_positions[ns] = ("transporter", x, y, yaw)
 
-    picker_has_item     = {ns: rng.random() > 0.5 for ns in picker_ns}
-    transporter_loads   = {ns: (round(rng.uniform(0, 5), 2), 10.0) for ns in transporter_ns}
-    transporter_carried = {ns: rng.sample(item_ids, k=min(rng.randint(0, 3), len(item_ids))) for ns in transporter_ns}
-    transporter_in_wz   = {ns: rng.random() > 0.6 for ns in transporter_ns}
+    if pickers_have_item:
+        picker_has_item = {ns: True for ns in picker_ns}
+    elif pickers_no_item:
+        picker_has_item = {ns: False for ns in picker_ns}
+    else:
+        picker_has_item = {ns: rng.random() > 0.5 for ns in picker_ns}
+
+    if transporters_empty:
+        transporter_loads   = {ns: (0.0, 10.0) for ns in transporter_ns}
+        transporter_carried = {ns: [] for ns in transporter_ns}
+    else:
+        transporter_loads   = {ns: (round(rng.uniform(0, 5), 2), 10.0) for ns in transporter_ns}
+        transporter_carried = {ns: rng.sample(item_ids, k=min(rng.randint(0, 3), len(item_ids))) for ns in transporter_ns}
+
+    if transporters_in_wz:
+        transporter_in_wz = {ns: True for ns in transporter_ns}
+    elif transporters_not_in_wz:
+        transporter_in_wz = {ns: False for ns in transporter_ns}
+    else:
+        transporter_in_wz = {ns: rng.random() > 0.6 for ns in transporter_ns}
 
     # ---- waiting zones ----
     waiting_zones = []
