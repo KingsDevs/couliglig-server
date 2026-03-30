@@ -185,6 +185,23 @@ def get_all_item_weights(r: redis.Redis) -> dict[str, float]:
             weights[item_id] = float(item_weight)
     return weights
 
+def get_all_item_receiver_docks(r: redis.Redis) -> dict[str, str]:
+    """Returns { item_id: receiver_dock_id } for all docks in docks:all that have an item with a receiver dock."""
+    receivers: dict[str, str] = {}
+    dock_ids = r.smembers("docks:all")
+    for dock_id in dock_ids:
+        dock_type_str = r.hget(f"dock_meta:{dock_id}", "dock_type")
+        if dock_type_str is None:
+            continue
+        data = r.hgetall(f"dock:{dock_type_str}:{dock_id}")
+        if not data:
+            continue
+        item_id = data.get("item_id")
+        receiver_dock_id = data.get("receiver_dock_id")
+        if item_id and receiver_dock_id not in (None, ""):
+            receivers[item_id] = receiver_dock_id
+    return receivers
+
 
 # ---------------------------------------------------------
 # Robot positions
@@ -308,14 +325,22 @@ def add_item_to_pickup_dock(
     r: redis.Redis,
     dock_id: str,
     item_id: str,
+    receiver_dock_id: str,
     item_weight: float = 1.0
 ) -> bool:
     if not _check_if_dock_id_exists(r, dock_id):
         raise ValueError(f"Dock ID {dock_id} does not exist")
+    
+    if not _check_if_dock_id_exists(r, receiver_dock_id):
+        raise ValueError(f"Receiver Dock ID {receiver_dock_id} does not exist")
 
     dock_type = _get_dock_type_by_id(r, dock_id)
     if dock_type != DockType.PICKUP:
         raise ValueError("Can only add items to pickup docks")
+    
+    receiver_dock_type = _get_dock_type_by_id(r, receiver_dock_id)
+    if receiver_dock_type != DockType.RECEIVER:
+        raise ValueError("Can only add items to pickup docks with a valid receiver dock")
 
     key = _dock_key(dock_type, dock_id)
     data = r.hgetall(key)
@@ -325,7 +350,7 @@ def add_item_to_pickup_dock(
     if data.get("item_id"):
         return False
 
-    r.hset(key, mapping={"item_id": item_id, "item_weight": item_weight, "ts": int(time.time())})
+    r.hset(key, mapping={"item_id": item_id, "item_weight": item_weight, "receiver_dock_id": receiver_dock_id, "ts": int(time.time())})
 
     return True
 
@@ -715,6 +740,7 @@ def get_obs_builder_inputs(
         "dock_states":         get_all_dock_states(r),
         "dock_positions":      get_all_dock_positions(r),
         "item_weights":        get_all_item_weights(r),
+        "item_receiver_docks": get_all_item_receiver_docks(r),
         "robot_positions":     get_all_robot_positions(r, robot_id),
         "picker_has_item":     picker_has_item,
         "transporter_loads":   transporter_loads,

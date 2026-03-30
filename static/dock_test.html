@@ -129,6 +129,12 @@
               />
 
               <input
+                id="add_item_receiver_dock"
+                class="form-control mb-2"
+                placeholder="Receiver Dock ID"
+              />
+
+              <input
                 id="add_item_id"
                 class="form-control mb-2"
                 placeholder="Item ID"
@@ -306,6 +312,7 @@
         post("/dock/add-item", {
           dock_id: document.getElementById("add_item_dock").value,
           item_id: document.getElementById("add_item_id").value,
+          receiver_dock_id: document.getElementById("add_item_receiver_dock").value,
           item_weight: document.getElementById("add_item_weight").value
              ? parseFloat(document.getElementById("add_item_weight").value)
              : undefined,
