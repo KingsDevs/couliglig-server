@@ -495,6 +495,7 @@ def get_all_dock_states(r: redis.Redis) -> list[dict]:
                     "robot_id":  data.get("robot_id"),
                     "item_id":   data.get("item_id"),
                     "item_weight": data.get("item_weight"),
+                    "receiver_dock_id": data.get("receiver_dock_id"),
                     "ts":        data.get("ts"),
                 })
         if cursor == 0:
