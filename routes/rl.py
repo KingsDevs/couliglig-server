@@ -95,6 +95,7 @@ def obs_builder_inputs_dummy(
     pickup_docks   = [d for d in db_docks if d.dock_type == DockType.PICKUP]
     wz_docks       = [d for d in db_docks if d.dock_type == DockType.WAITING_ZONE]
     receiver_docks = [d for d in db_docks if d.dock_type == DockType.RECEIVER]
+    handoff_docks  = [d for d in db_docks if d.dock_type == DockType.HANDOFF]
 
     receiver_ids = [d.dock_id for d in receiver_docks]
     item_ids     = [f"item_{i}" for i in range(len(pickup_docks))]
@@ -168,6 +169,27 @@ def obs_builder_inputs_dummy(
         })
         dock_positions[d.dock_id] = (x, y, yaw)
 
+    for d in handoff_docks:
+        x   = d.x     if d.x     is not None else 0.0
+        y   = d.y     if d.y     is not None else 0.0
+        yaw = d.theta if d.theta is not None else 0.0
+        if no_docked_robots:
+            status = "available"
+            assigned_robot = ""
+        else:
+            status = rng.choice(statuses)
+            assigned_robot = rng.choice(all_robot_ns) if status != "available" and all_robot_ns else ""
+        dock_states.append({
+            "dock_type": "hand_off",
+            "dock_id": d.dock_id,
+            "x": str(x), "y": str(y), "yaw": str(yaw),
+            "status": status,
+            "robot_id": assigned_robot,
+            "item_id": "", "item_weight": "", "receiver_dock_id": "",
+            "ts": str(int(time.time())),
+        })
+        dock_positions[d.dock_id] = (x, y, yaw)
+
     # ---- item weights & receiver docks ----
     item_weights = {}
     item_receiver_docks = {}
@@ -209,6 +231,13 @@ def obs_builder_inputs_dummy(
         transporter_in_wz = {ns: False for ns in transporter_ns}
     else:
         transporter_in_wz = {ns: rng.random() > 0.6 for ns in transporter_ns}
+
+    # ---- transporter occupancy (active hand_off docks) ----
+    active_statuses = {"reserved", "occupied"}
+    transporter_occupany = [
+        ds for ds in dock_states
+        if ds["dock_type"] == "hand_off" and ds["status"] in active_statuses
+    ]
 
     # ---- waiting zones ----
     waiting_zones = []
@@ -276,6 +305,7 @@ def obs_builder_inputs_dummy(
         "transporter_carried":  transporter_carried,
         "transporter_in_wz":    transporter_in_wz,
         "waiting_zones":        waiting_zones,
+        "transporter_occupany": transporter_occupany,
         "action_map":           action_map,
         "rl_constants":         rl_constants,
     }

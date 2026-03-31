@@ -248,6 +248,7 @@ class TestDockActions:
         resp = client.post("/dock/add-item", json={
             "dock_id": "dock_pickup_1",
             "item_id": "item_001",
+            "receiver_dock_id": "dock_receiver_1",
             "item_weight": 2.5,
         })
         assert resp.status_code == 200
@@ -258,13 +259,14 @@ class TestDockActions:
         resp = client.post("/dock/add-item", json={
             "dock_id": "dock_receiver_1",
             "item_id": "item_002",
+            "receiver_dock_id": "dock_receiver_1",
         })
         assert resp.status_code == 400
 
     def test_add_item_already_has_item(self, client, db_session, fake_redis):
         _seed_config_and_docks(db_session, fake_redis)
-        client.post("/dock/add-item", json={"dock_id": "dock_pickup_1", "item_id": "item_001"})
-        resp = client.post("/dock/add-item", json={"dock_id": "dock_pickup_1", "item_id": "item_002"})
+        client.post("/dock/add-item", json={"dock_id": "dock_pickup_1", "item_id": "item_001", "receiver_dock_id": "dock_receiver_1"})
+        resp = client.post("/dock/add-item", json={"dock_id": "dock_pickup_1", "item_id": "item_002", "receiver_dock_id": "dock_receiver_1"})
         assert resp.status_code == 400
 
     def test_remove_item(self, client, db_session, fake_redis):
@@ -316,7 +318,7 @@ class TestDockActions:
     def test_release_dock(self, client, db_session, fake_redis):
         _seed_config_and_docks(db_session, fake_redis)
         client.post("/dock/reserve", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
-        resp = client.post("/dock/release", json={"dock_id": "dock_pickup_1"})
+        resp = client.post("/dock/release", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
         # Verify status reset to available
@@ -325,7 +327,7 @@ class TestDockActions:
         assert state["robot_id"] == ""
 
     def test_release_invalid_dock(self, client):
-        resp = client.post("/dock/release", json={"dock_id": "no_such_dock"})
+        resp = client.post("/dock/release", json={"dock_id": "no_such_dock", "robot_id": "robot_1"})
         assert resp.status_code == 400
 
 
@@ -362,6 +364,74 @@ class TestDockStateQueries:
 
     def test_get_all_dock_states_no_active_config(self, client, fake_redis):
         resp = client.get("/dock/all_dock_states")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_active_docks_empty_when_all_available(self, client, db_session, fake_redis):
+        """No docks are reserved/occupied initially."""
+        _seed_config_and_docks(db_session, fake_redis)
+        resp = client.get("/dock/active_docks")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_active_docks_shows_reserved(self, client, db_session, fake_redis):
+        """A reserved dock appears in active_docks."""
+        _seed_config_and_docks(db_session, fake_redis)
+        client.post("/dock/reserve", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
+        resp = client.get("/dock/active_docks")
+        assert resp.status_code == 200
+        docks = resp.json()
+        assert len(docks) == 1
+        assert docks[0]["dock_id"] == "dock_pickup_1"
+        assert docks[0]["status"] == "reserved"
+
+    def test_active_docks_shows_occupied(self, client, db_session, fake_redis):
+        """An occupied dock appears in active_docks."""
+        _seed_config_and_docks(db_session, fake_redis)
+        client.post("/dock/reserve", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
+        client.post("/dock/occupy",  json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
+        resp = client.get("/dock/active_docks")
+        assert resp.status_code == 200
+        docks = resp.json()
+        assert len(docks) == 1
+        assert docks[0]["status"] == "occupied"
+
+    def test_active_docks_filter_by_dock_type(self, client, db_session, fake_redis):
+        """dock_type query param filters results to that type only."""
+        _seed_config_and_docks(db_session, fake_redis)
+        client.post("/dock/reserve", json={"dock_id": "dock_pickup_1",  "robot_id": "robot_1"})
+        client.post("/dock/reserve", json={"dock_id": "dock_wz_1",      "robot_id": "robot_2"})
+
+        resp = client.get("/dock/active_docks?dock_type=pickup")
+        assert resp.status_code == 200
+        docks = resp.json()
+        assert len(docks) == 1
+        assert docks[0]["dock_id"] == "dock_pickup_1"
+
+        resp = client.get("/dock/active_docks?dock_type=waiting_zone")
+        assert resp.status_code == 200
+        docks = resp.json()
+        assert len(docks) == 1
+        assert docks[0]["dock_id"] == "dock_wz_1"
+
+    def test_active_docks_invalid_dock_type_returns_400(self, client, db_session, fake_redis):
+        """Unknown dock_type value returns 400."""
+        _seed_config_and_docks(db_session, fake_redis)
+        resp = client.get("/dock/active_docks?dock_type=handoff")
+        assert resp.status_code == 400
+
+    def test_active_docks_released_dock_not_shown(self, client, db_session, fake_redis):
+        """After releasing, the dock no longer appears in active_docks."""
+        _seed_config_and_docks(db_session, fake_redis)
+        client.post("/dock/reserve", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
+        client.post("/dock/release", json={"dock_id": "dock_pickup_1", "robot_id": "robot_1"})
+        resp = client.get("/dock/active_docks")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_active_docks_no_active_config(self, client, fake_redis):
+        """With no active config, active_docks returns empty list."""
+        resp = client.get("/dock/active_docks")
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -414,6 +484,7 @@ class TestObsBuilderInputs:
         client.post("/dock/add-item", json={
             "dock_id": "dock_pickup_1",
             "item_id": "item_001",
+            "receiver_dock_id": "dock_receiver_1",
             "item_weight": 3.0,
         })
 
@@ -560,7 +631,7 @@ class TestRedisDockRuntimeUnit:
 
     def test_get_all_item_weights(self, db_session, fake_redis):
         _seed_config_and_docks(db_session, fake_redis)
-        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_abc", item_weight=5.0)
+        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_abc", "dock_receiver_1", item_weight=5.0)
         weights = rdr.get_all_item_weights(fake_redis)
         assert weights["item_abc"] == pytest.approx(5.0)
 
@@ -607,13 +678,13 @@ class TestRedisDockRuntimeUnit:
     def test_reserve_release_cycle(self, db_session, fake_redis):
         _seed_config_and_docks(db_session, fake_redis)
         rdr.reserve_dock(fake_redis, "dock_pickup_1", "robot_A")
-        rdr.release_dock(fake_redis, "dock_pickup_1")
+        rdr.release_dock(fake_redis, "dock_pickup_1", "robot_A")
         # After release, another robot should be able to reserve
         assert rdr.reserve_dock(fake_redis, "dock_pickup_1", "robot_B") is True
 
     def test_add_and_remove_item(self, db_session, fake_redis):
         _seed_config_and_docks(db_session, fake_redis)
-        assert rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "itm_1", item_weight=1.5)
+        assert rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "itm_1", "dock_receiver_1", item_weight=1.5)
         state = rdr.get_dock_state(fake_redis, "dock_pickup_1")
         assert state["item_id"] == "itm_1"
         assert float(state["item_weight"]) == pytest.approx(1.5)
@@ -657,7 +728,7 @@ class TestBuildActionMap:
     def test_action_map_item_slot_content(self, db_session, fake_redis):
         """First item_slot matches the (only) pickup dock with correct fields."""
         _seed_config_and_docks(db_session, fake_redis)
-        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_A", item_weight=2.5)
+        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_A", "dock_receiver_1", item_weight=2.5)
         action_map = rdr.build_action_map(fake_redis, [])
 
         slot = action_map["item_slots"][0]
@@ -815,7 +886,7 @@ class TestBuilderInputsActionMap:
     def test_action_map_item_slot_matches_dock(self, client, db_session, fake_redis):
         """item_slots[0] dock_id corresponds to the pickup dock in Redis."""
         _seed_config_and_docks(db_session, fake_redis)
-        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_99", item_weight=7.0)
+        rdr.add_item_to_pickup_dock(fake_redis, "dock_pickup_1", "item_99", "dock_receiver_1", item_weight=7.0)
 
         with patch("services.redis_dock_runtime.requests.get") as mock_get:
             mock_get.return_value = MagicMock(status_code=404)

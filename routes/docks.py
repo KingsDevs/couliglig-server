@@ -6,7 +6,8 @@ from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
 from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
-from services.redis_dock_runtime import redis_client_from_env, get_active_dock_config_id, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state, get_all_dock_states
+from definitions import DockType
+from services.redis_dock_runtime import redis_client_from_env, get_active_dock_config_id, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state, get_all_dock_states, get_active_docks
 
 router = APIRouter(prefix="/dock", tags=["dock"])
 
@@ -283,6 +284,7 @@ def release(request: ReleaseDockRequest):
         release_dock(
             redis_client,
             request.dock_id,
+            request.robot_id,
         )
     except ValueError as e:
         raise HTTPException(
@@ -315,6 +317,24 @@ def all_dock_states():
     states = get_all_dock_states(redis_client)
 
     return states
+
+
+@router.get("/active_docks")
+def active_docks(dock_type: str | None = None):
+    """Return all docks with status reserved or occupied.
+
+    Optional query param ``dock_type`` filters by dock type
+    (``pickup``, ``waiting_zone``, ``receiver``).
+    """
+    if dock_type is not None:
+        allowed = {dt.value for dt in DockType}
+        if dock_type not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid dock_type '{dock_type}'. Allowed: {sorted(allowed)}",
+            )
+    return get_active_docks(redis_client, dock_type)
+
 
 @router.post("/clear")
 def clear_docks():

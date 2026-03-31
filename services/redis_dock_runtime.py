@@ -513,8 +513,54 @@ def get_all_dock_states(r: redis.Redis) -> list[dict]:
     return dock_states
 
 
-# ---------------------------------------------------------
-# Action map  (deterministic index ↔ entity mapping)
+def get_active_docks(
+    r: redis.Redis,
+    dock_type: str | None = None,
+) -> list[dict]:
+    """Return all docks whose status is reserved or occupied.
+
+    Parameters
+    ----------
+    dock_type : str | None
+        Optional filter: ``"pickup"``, ``"waiting_zone"``, or ``"receiver"``.
+        When ``None`` all dock types are returned.
+    """
+    active_config = r.get("active_dock_config")
+    if not active_config or active_config == "none":
+        return []
+
+    ACTIVE_STATUSES = {DockStatus.reserved.value, DockStatus.occupied.value}
+
+    pattern = f"dock:{dock_type}:*" if dock_type else "dock:*"
+
+    cursor = 0
+    results: list[dict] = []
+    while True:
+        cursor, keys = r.scan(cursor=cursor, match=pattern, count=500)
+        for key in keys:
+            data = r.hgetall(key)
+            if not data:
+                continue
+            if data.get("status") not in ACTIVE_STATUSES:
+                continue
+            parts = key.split(":")
+            results.append({
+                "dock_type":   parts[1],
+                "dock_id":     parts[2],
+                "x":           data.get("x"),
+                "y":           data.get("y"),
+                "yaw":         data.get("yaw"),
+                "status":      data.get("status"),
+                "robot_id":    data.get("robot_id"),
+                "item_id":     data.get("item_id"),
+                "item_weight": data.get("item_weight"),
+                "ts":          data.get("ts"),
+            })
+        if cursor == 0:
+            break
+    return results
+
+
 # ---------------------------------------------------------
 
 def build_action_map(r: redis.Redis, agent_states: list[dict]) -> dict:
@@ -758,6 +804,7 @@ def get_obs_builder_inputs(
         "transporter_carried": transporter_carried,
         "transporter_in_wz":   transporter_in_wz,
         "waiting_zones":       get_all_waiting_zone_states(r),
-        "action_map":          action_map,
+        "transporter_occupany": get_active_docks(r, dock_type=DockType.HANDOFF.value),
+        "action_map":         action_map,
         "rl_constants":        rl_constants,
     }

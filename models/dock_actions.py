@@ -24,3 +24,4 @@ class OccupyDockRequest(BaseModel):
 
 class ReleaseDockRequest(BaseModel):
     dock_id: str
+    robot_id: str
