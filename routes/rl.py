@@ -3,6 +3,7 @@ import random
 import time
 import requests
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from services.database import get_db_session
 from schema import DockConfig, Dock
@@ -58,6 +59,57 @@ def update_robot_state(robot_id: str, body: dict):
     if not resp.ok:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     return resp.json()
+
+
+class AddItemToTransporterRequest(BaseModel):
+    item_id: str
+    item_weight: float = 0.0
+
+
+@router.post("/robot-state/{robot_id}/add-item")
+def add_item_to_transporter(robot_id: str, body: AddItemToTransporterRequest):
+    """
+    Add a single item to a transporter robot's carried_items and update its capacity.
+    Fetches the robot's current state, appends the item, then PATCHes back.
+    """
+    ip = _get_robot_ip(robot_id)
+    url = f"http://{ip}:8000/rl"
+
+    try:
+        get_resp = requests.get(url, timeout=5)
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=502, detail=f"Could not connect to robot '{robot_id}' at {ip}")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail=f"Timeout connecting to robot '{robot_id}' at {ip}")
+
+    if not get_resp.ok:
+        raise HTTPException(status_code=get_resp.status_code, detail=get_resp.text)
+
+    state = get_resp.json()
+    if state.get("agent_type") != "transporter":
+        raise HTTPException(status_code=400, detail=f"Robot '{robot_id}' is not a transporter")
+
+    carried_items: list = state.get("carried_items", [])
+    if body.item_id in carried_items:
+        raise HTTPException(status_code=409, detail=f"Item '{body.item_id}' already carried by robot '{robot_id}'")
+
+    carried_items.append(body.item_id)
+    new_capacity = state.get("capacity", 0.0) + body.item_weight
+
+    try:
+        patch_resp = requests.patch(
+            url,
+            json={"carried_items": carried_items, "capacity": new_capacity},
+            timeout=5,
+        )
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=502, detail=f"Could not connect to robot '{robot_id}' at {ip}")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail=f"Timeout connecting to robot '{robot_id}' at {ip}")
+
+    if not patch_resp.ok:
+        raise HTTPException(status_code=patch_resp.status_code, detail=patch_resp.text)
+    return patch_resp.json()
 
 
 @router.get("/builder-inputs")
