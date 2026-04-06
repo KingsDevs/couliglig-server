@@ -1,5 +1,7 @@
+import json
 import random
 import time
+import requests
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from services.database import get_db_session
@@ -10,6 +12,52 @@ from services.redis_dock_runtime import redis_client_from_env, get_obs_builder_i
 router = APIRouter(prefix="/rl", tags=["rl"])
 
 redis_client = redis_client_from_env()
+
+
+def _get_robot_ip(robot_id: str) -> str:
+    """Look up a robot's IP from Redis by hostname or namespace."""
+    raw = redis_client.get("robot_ips")
+    if not raw:
+        raise HTTPException(status_code=503, detail="No robots registered in Redis")
+    try:
+        robot_dict = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=503, detail="Malformed robot_ips in Redis")
+
+    # Match by hostname (dict key) first, then by namespace field
+    entry = robot_dict.get(robot_id)
+    if entry is None:
+        entry = next(
+            (v for v in robot_dict.values() if isinstance(v, dict) and v.get("namespace") == robot_id),
+            None,
+        )
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Robot '{robot_id}' not found in Redis")
+
+    ip = entry.get("ip") if isinstance(entry, dict) else entry
+    if not ip:
+        raise HTTPException(status_code=404, detail=f"No IP stored for robot '{robot_id}'")
+    return ip
+
+
+@router.patch("/robot-state/{robot_id}")
+def update_robot_state(robot_id: str, body: dict):
+    """
+    Proxy a PATCH /rl request to the given robot.
+    Looks up the robot's IP from Redis; no need to pass the IP manually.
+    The body should contain the fields to update (UpdatePickerAgent or UpdateTransporterAgent).
+    """
+    ip = _get_robot_ip(robot_id)
+    try:
+        resp = requests.patch(f"http://{ip}:8000/rl", json=body, timeout=5)
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=502, detail=f"Could not connect to robot '{robot_id}' at {ip}")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail=f"Timeout connecting to robot '{robot_id}' at {ip}")
+
+    if not resp.ok:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
 
 
 @router.get("/builder-inputs")
