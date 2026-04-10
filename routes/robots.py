@@ -44,7 +44,8 @@ async def _broadcast_online():
             await ws.send_text(msg)
         except Exception:
             dead.add(ws)
-    _dashboard_subscribers -= dead
+    for ws in dead:
+        _dashboard_subscribers.discard(ws)
 
 
 def _register_robot_in_redis(hostname: str, ip: str, namespace: str, ros_domain_id: int):
