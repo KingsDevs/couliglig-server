@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>WebSocket Test</title>
+
+    <link rel="stylesheet" href="/static/css/bootstrap.min.css">
+    <script src="/static/js/popper.min.js"></script>
+    <script src="/static/js/bootstrap.min.js"></script>
+
+    <style>
+      body {
+        background: #f5f5f5;
+      }
+
+      .card {
+        margin-bottom: 20px;
+      }
+
+      pre {
+        background: #111;
+        color: #0f0;
+        padding: 15px;
+        height: 200px;
+        overflow-y: auto;
+        font-size: 13px;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+
+      .badge-connected {
+        background-color: #198754;
+      }
+
+      .badge-disconnected {
+        background-color: #dc3545;
+      }
+
+      .status-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 6px;
+        background: #dc3545;
+      }
+
+      .status-dot.connected {
+        background: #198754;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container py-4">
+      <h2 class="mb-1">🤖 Couliglig WebSocket Test</h2>
+      <p class="text-muted mb-4">Test robot heartbeat and dashboard live feed WebSocket connections.</p>
+
+      <div class="row">
+
+        <!-- ROBOT WS -->
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span>Robot Heartbeat &mdash; <code>WS /robots/ws</code></span>
+              <span id="robot-status-dot" class="status-dot"></span>
+            </div>
+            <div class="card-body">
+              <input id="robot_hostname" class="form-control mb-2" placeholder="Hostname" />
+              <input id="robot_ip" class="form-control mb-2" placeholder="IP (leave blank to auto-detect)" />
+              <input id="robot_namespace" class="form-control mb-2" placeholder="Namespace (e.g. couliglig_bot_1)" />
+              <input id="robot_ros_domain_id" class="form-control mb-2" placeholder="ROS Domain ID" type="number" value="0" />
+              <input id="robot_heartbeat_interval" class="form-control mb-2" placeholder="Heartbeat interval (seconds)" type="number" value="5" />
+
+              <div class="d-flex gap-2">
+                <button class="btn btn-success w-50" onclick="connectRobot()">Connect</button>
+                <button class="btn btn-danger w-50" onclick="disconnectRobot()">Disconnect</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">Robot WS Log</div>
+            <div class="card-body p-0">
+              <pre id="robot-log"></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- DASHBOARD WS -->
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span>Online Robots Feed &mdash; <code>WS /robots/online/ws</code></span>
+              <span id="dashboard-status-dot" class="status-dot"></span>
+            </div>
+            <div class="card-body">
+              <p class="text-muted small mb-3">
+                Connects as a dashboard subscriber. Receives a pushed update every time a robot connects or disconnects.
+              </p>
+              <div class="d-flex gap-2">
+                <button class="btn btn-primary w-50" onclick="connectDashboard()">Subscribe</button>
+                <button class="btn btn-danger w-50" onclick="disconnectDashboard()">Unsubscribe</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">Live Robot List</div>
+            <div class="card-body p-0">
+              <pre id="dashboard-log"></pre>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <script>
+      const API = `${window.location.protocol}//${window.location.host}`;
+      const WS_BASE = API.replace("http://", "ws://").replace("https://", "wss://");
+
+      let robotWs = null;
+      let robotHeartbeatTimer = null;
+      let dashboardWs = null;
+
+      // --- Robot WS ---
+
+      function connectRobot() {
+        if (robotWs && robotWs.readyState === WebSocket.OPEN) {
+          logRobot("Already connected.");
+          return;
+        }
+
+        const hostname = document.getElementById("robot_hostname").value || window.location.hostname;
+        const ip = document.getElementById("robot_ip").value || null;
+        const namespace = document.getElementById("robot_namespace").value || "couliglig";
+        const ros_domain_id = parseInt(document.getElementById("robot_ros_domain_id").value) || 0;
+        const interval = parseInt(document.getElementById("robot_heartbeat_interval").value) || 5;
+
+        robotWs = new WebSocket(`${WS_BASE}/robots/ws`);
+
+        robotWs.onopen = () => {
+          setStatus("robot", true);
+          const payload = { hostname, ip: ip || detectIp(), namespace, ros_domain_id };
+          robotWs.send(JSON.stringify(payload));
+          logRobot(`Connected. Sent registration: ${JSON.stringify(payload)}`);
+
+          robotHeartbeatTimer = setInterval(() => {
+            if (robotWs.readyState === WebSocket.OPEN) {
+              robotWs.send(JSON.stringify({ type: "heartbeat" }));
+              logRobot("Heartbeat sent.");
+            }
+          }, interval * 1000);
+        };
+
+        robotWs.onclose = (e) => {
+          setStatus("robot", false);
+          clearInterval(robotHeartbeatTimer);
+          logRobot(`Disconnected (code ${e.code}).`);
+        };
+
+        robotWs.onerror = (e) => {
+          logRobot(`Error: ${e.message || "WebSocket error"}`);
+        };
+      }
+
+      function disconnectRobot() {
+        if (robotWs) {
+          robotWs.close();
+          robotWs = null;
+        }
+        clearInterval(robotHeartbeatTimer);
+      }
+
+      // --- Dashboard WS ---
+
+      function connectDashboard() {
+        if (dashboardWs && dashboardWs.readyState === WebSocket.OPEN) {
+          logDashboard("Already subscribed.");
+          return;
+        }
+
+        dashboardWs = new WebSocket(`${WS_BASE}/robots/online/ws`);
+
+        dashboardWs.onopen = () => {
+          setStatus("dashboard", true);
+          logDashboard("Subscribed. Waiting for updates...");
+        };
+
+        dashboardWs.onmessage = (event) => {
+          const robots = JSON.parse(event.data);
+          const ts = new Date().toLocaleTimeString();
+          if (robots.length === 0) {
+            logDashboard(`[${ts}] No robots online.`);
+          } else {
+            logDashboard(`[${ts}] ${robots.length} robot(s) online:\n${JSON.stringify(robots, null, 2)}`);
+          }
+        };
+
+        dashboardWs.onclose = (e) => {
+          setStatus("dashboard", false);
+          logDashboard(`Disconnected (code ${e.code}).`);
+        };
+
+        dashboardWs.onerror = () => {
+          logDashboard("WebSocket error.");
+        };
+      }
+
+      function disconnectDashboard() {
+        if (dashboardWs) {
+          dashboardWs.close();
+          dashboardWs = null;
+        }
+      }
+
+      // --- Helpers ---
+
+      function logRobot(msg) {
+        const el = document.getElementById("robot-log");
+        el.textContent += msg + "\n";
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function logDashboard(msg) {
+        const el = document.getElementById("dashboard-log");
+        el.textContent += msg + "\n";
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function setStatus(target, connected) {
+        const dot = document.getElementById(`${target}-status-dot`);
+        dot.classList.toggle("connected", connected);
+      }
+
+      function detectIp() {
+        // Best-effort: return the host we're talking to (not the robot's LAN IP, but useful for local testing)
+        return window.location.hostname;
+      }
+    </script>
+  </body>
+</html>
