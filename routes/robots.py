@@ -1,8 +1,10 @@
 import json
+import asyncio
+import logging
 import redis
 import os
 import requests
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from models import RobotRegistration, RobotStatus, RobotStatusesResponse, RobotOnline, RobotOnlineResponse
 from models.robot_infos import RobotInfoDef
@@ -25,6 +27,105 @@ redis_client = redis.StrictRedis(
 
 def is_couliglig_lan(name: str) -> bool:
     return name.startswith("couliglig")
+
+
+# --- WebSocket robot helpers ---
+
+_dashboard_subscribers: set[WebSocket] = set()
+
+
+async def _broadcast_online():
+    raw = redis_client.get("robot_ips")
+    ip_dict = json.loads(raw) if raw else {}
+    msg = json.dumps(list(ip_dict.values()))
+    dead = set()
+    for ws in _dashboard_subscribers:
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            dead.add(ws)
+    _dashboard_subscribers -= dead
+
+
+def _register_robot_in_redis(hostname: str, ip: str, namespace: str, ros_domain_id: int):
+    existing = redis_client.get("robot_ips")
+    ip_dict = json.loads(existing) if existing else {}
+    ip_dict[hostname] = {
+        "hostname": hostname,
+        "ip": ip,
+        "namespace": namespace,
+        "ros_domain_id": ros_domain_id,
+        "timestamp": datetime.now().isoformat() + "Z",
+    }
+    redis_client.set("robot_ips", json.dumps(ip_dict))
+
+
+def _update_robot_timestamp(hostname: str):
+    existing = redis_client.get("robot_ips")
+    if not existing:
+        return
+    ip_dict = json.loads(existing)
+    if hostname in ip_dict:
+        ip_dict[hostname]["timestamp"] = datetime.now().isoformat() + "Z"
+        redis_client.set("robot_ips", json.dumps(ip_dict))
+
+
+def _remove_robot_from_redis(hostname: str):
+    existing = redis_client.get("robot_ips")
+    if not existing:
+        return
+    ip_dict = json.loads(existing)
+    if hostname in ip_dict:
+        ip_dict.pop(hostname)
+        redis_client.set("robot_ips", json.dumps(ip_dict))
+        logging.info(f"[robot-ws] {hostname} removed from robot_ips")
+
+
+@register_router.websocket("/ws")
+async def robot_websocket(websocket: WebSocket):
+    await websocket.accept()
+    hostname = None
+    try:
+        data = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+        hostname = data["hostname"]
+        ip = data["ip"]
+        namespace = data.get("namespace", "couliglig")
+        ros_domain_id = data.get("ros_domain_id", 0)
+
+        _register_robot_in_redis(hostname, ip, namespace, ros_domain_id)
+        logging.info(f"[robot-ws] {hostname} ({ip}) connected")
+        await _broadcast_online()
+
+        while True:
+            msg = await asyncio.wait_for(websocket.receive_json(), timeout=15)
+            if msg.get("type") == "heartbeat":
+                _update_robot_timestamp(hostname)
+                logging.debug(f"[robot-ws] {hostname} heartbeat")
+
+    except (WebSocketDisconnect, asyncio.TimeoutError) as e:
+        logging.warning(f"[robot-ws] {hostname} disconnected ({type(e).__name__})")
+    except Exception as e:
+        logging.warning(f"[robot-ws] {hostname} error ({e})")
+    finally:
+        if hostname:
+            _remove_robot_from_redis(hostname)
+            await _broadcast_online()
+
+@register_router.websocket("/online/ws")
+async def robots_online_websocket(websocket: WebSocket):
+    await websocket.accept()
+    _dashboard_subscribers.add(websocket)
+    try:
+        # Send current state immediately on connect
+        await _broadcast_online()
+        # Keep connection open; dashboard just listens
+        while True:
+            await websocket.receive_text()
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        _dashboard_subscribers.discard(websocket)
+
 
 @register_router.post("/register")
 def register_robot(data: RobotRegistration):

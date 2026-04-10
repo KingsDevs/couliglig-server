@@ -30,19 +30,19 @@ services:
     networks:
       - couliglig_network
 
-  robot-watcher:
-    build:
-      context: .
-    container_name: robot-watcher
-    restart: always
-    depends_on:
-      - redis
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    command: ["python", "robot_watcher.py"]
-    networks:
-      - couliglig_network
+  # robot-watcher:
+  #   build:
+  #     context: .
+  #   container_name: robot-watcher
+  #   restart: always
+  #   depends_on:
+  #     - redis
+  #   environment:
+  #     - REDIS_HOST=redis
+  #     - REDIS_PORT=6379
+  #   command: ["python", "robot_watcher.py"]
+  #   networks:
+  #     - couliglig_network
 
   mediamtx:
     image: bluenviron/mediamtx:latest
