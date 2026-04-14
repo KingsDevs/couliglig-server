@@ -11,6 +11,7 @@ Run with:
 """
 
 import json
+from pathlib import Path
 import pytest
 import fakeredis
 from unittest.mock import patch, MagicMock
@@ -21,6 +22,8 @@ from sqlalchemy.pool import StaticPool
 
 from schema.base import Base
 from schema.docks import DockConfig, Dock
+from schema.map import MapConfig
+from schema.robot_info import RobotInfo
 from definitions import DockType
 from main import app
 from services.database import get_db_session
@@ -153,6 +156,94 @@ class TestDockConfig:
         resp = client.delete(f"/dock/delete_config?config_id={config_id}")
         assert resp.status_code == 200
         assert resp.json()["success"] is True
+
+    def test_delete_config_cascades_map_robot_info_and_map_files(self, client, db_session, fake_redis):
+        config_id, _ = _seed_config_and_docks(db_session, fake_redis)
+
+        map_dir = Path("db/maps")
+        map_dir.mkdir(parents=True, exist_ok=True)
+        yaml_name = f"cascade_{config_id}.yaml"
+        image_name = f"cascade_{config_id}.png"
+        yaml_path = map_dir / yaml_name
+        image_path = map_dir / image_name
+        yaml_path.write_text("image: cascade.png\nresolution: 0.05\n", encoding="utf-8")
+        image_path.write_bytes(b"fake-image")
+
+        map_cfg = MapConfig(
+            dock_config_id=config_id,
+            map_yaml_filename=yaml_name,
+            map_image_filename=image_name,
+        )
+        db_session.add(map_cfg)
+        db_session.commit()
+        db_session.refresh(map_cfg)
+
+        db_session.add(RobotInfo(
+            robot_name="robot_1",
+            initial_x=1.0,
+            initial_y=2.0,
+            initial_theta=0.0,
+            map_id=map_cfg.id,
+        ))
+        db_session.commit()
+
+        resp = client.delete(f"/dock/delete_config?config_id={config_id}")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        assert db_session.query(DockConfig).filter(DockConfig.id == config_id).first() is None
+        assert db_session.query(Dock).filter(Dock.config_id == config_id).count() == 0
+        assert db_session.query(MapConfig).filter(MapConfig.id == map_cfg.id).first() is None
+        assert db_session.query(RobotInfo).filter(RobotInfo.map_id == map_cfg.id).count() == 0
+        assert not yaml_path.exists()
+        assert not image_path.exists()
+
+    def test_delete_config_clears_active_runtime_keys(self, client, db_session, fake_redis):
+        config_id, dock_ids = _seed_config_and_docks(db_session, fake_redis)
+        assert str(fake_redis.get("active_dock_config")) == str(config_id)
+        assert len(dock_ids) > 0
+
+        first_dock = dock_ids[0]
+        dock_type = fake_redis.hget(f"dock_meta:{first_dock}", "dock_type")
+        assert dock_type is not None
+        assert fake_redis.exists(f"dock:{dock_type}:{first_dock}") == 1
+
+        resp = client.delete(f"/dock/delete_config?config_id={config_id}")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        assert fake_redis.get("active_dock_config") == "none"
+        assert fake_redis.exists(f"dock_meta:{first_dock}") == 0
+        assert fake_redis.exists(f"dock:{dock_type}:{first_dock}") == 0
+
+    def test_delete_config_ignores_missing_map_files(self, client, db_session, fake_redis):
+        config_id, _ = _seed_config_and_docks(db_session, fake_redis)
+
+        map_cfg = MapConfig(
+            dock_config_id=config_id,
+            map_yaml_filename=f"missing_{config_id}.yaml",
+            map_image_filename=f"missing_{config_id}.png",
+        )
+        db_session.add(map_cfg)
+        db_session.commit()
+        db_session.refresh(map_cfg)
+
+        db_session.add(RobotInfo(
+            robot_name="robot_2",
+            initial_x=0.0,
+            initial_y=0.0,
+            initial_theta=0.0,
+            map_id=map_cfg.id,
+        ))
+        db_session.commit()
+
+        resp = client.delete(f"/dock/delete_config?config_id={config_id}")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        assert db_session.query(DockConfig).filter(DockConfig.id == config_id).first() is None
+        assert db_session.query(MapConfig).filter(MapConfig.id == map_cfg.id).first() is None
+        assert db_session.query(RobotInfo).filter(RobotInfo.map_id == map_cfg.id).count() == 0
 
     def test_delete_config_not_found(self, client):
         resp = client.delete("/dock/delete_config?config_id=9999")

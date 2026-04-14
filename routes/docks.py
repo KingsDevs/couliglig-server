@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+from pathlib import Path
 
 from services.database import get_db_session  # adjust
-from schema import DockConfig, Dock
+from schema import DockConfig, Dock, MapConfig, RobotInfo
 from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate, DockBulkUpdate, DockBulkDelete
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
 from definitions import DockType
@@ -12,6 +13,7 @@ from services.redis_dock_runtime import redis_client_from_env, get_active_dock_c
 router = APIRouter(prefix="/dock", tags=["dock"])
 
 redis_client = redis_client_from_env()
+MAP_STORAGE = Path("db/maps")
 
 @router.post("", response_model=DockConfigOut)
 def create_config(payload: DockConfigCreate, db: Session = Depends(get_db_session)):
@@ -158,8 +160,39 @@ def delete_config(config_id: int, db: Session = Depends(get_db_session)):
     if not cfg:
         raise HTTPException(status_code=404, detail="Config not found")
 
-    db.delete(cfg)
-    db.commit()
+    try:
+        map_cfg = db.query(MapConfig).filter(MapConfig.dock_config_id == config_id).first()
+
+        if map_cfg:
+            db.query(RobotInfo).filter(RobotInfo.map_id == map_cfg.id).delete(synchronize_session=False)
+
+        active_config = get_active_dock_config_id(redis_client)
+        if active_config and str(config_id) == str(active_config):
+            clear_all_dock_keys(redis_client)
+
+        if map_cfg:
+            for file_name in (map_cfg.map_yaml_filename, map_cfg.map_image_filename):
+                file_path = MAP_STORAGE / file_name
+                try:
+                    file_path.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to delete map file '{file_name}': {e}",
+                    )
+
+            db.delete(map_cfg)
+
+        db.delete(cfg)
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {"success": True}
 
