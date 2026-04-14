@@ -38,6 +38,20 @@ class DockUpdate(BaseModel):
     y: Optional[float] = None
     theta: Optional[float] = None
 
+
+class DockBulkUpdate(BaseModel):
+    id: int
+    dock_id: Optional[str] = None
+    dock_type: Optional[DockType] = None
+    aruco_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    theta: Optional[float] = None
+
+
+class DockBulkDelete(BaseModel):
+    ids: list[int]
+
 class DockOut(BaseModel):
     id: int
     config_id: int

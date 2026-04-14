@@ -198,17 +198,17 @@ class TestDockManagement:
         config_id, _ = _seed_config_and_docks(db_session, fake_redis)
         from schema.docks import Dock as DockModel
         dock = db_session.query(DockModel).filter_by(dock_id="dock_pickup_1").first()
-        resp = client.put(f"/dock/update_dock?dock_db_id={dock.id}", json={"x": 9.9, "y": 8.8})
+        resp = client.put("/dock/update_dock", json=[{"id": dock.id, "x": 9.9, "y": 8.8}])
         assert resp.status_code == 200
-        assert float(resp.json()["x"]) == pytest.approx(9.9)
+        assert float(resp.json()[0]["x"]) == pytest.approx(9.9)
 
     def test_delete_dock(self, client, db_session, fake_redis):
         config_id, _ = _seed_config_and_docks(db_session, fake_redis)
         from schema.docks import Dock as DockModel
         dock = db_session.query(DockModel).filter_by(dock_id="dock_pickup_1").first()
-        resp = client.delete(f"/dock/delete_dock?dock_db_id={dock.id}")
+        resp = client.request("DELETE", "/dock/delete_dock", json={"ids": [dock.id]})
         assert resp.status_code == 200
-        assert resp.json()["success"] is True
+        assert resp.json()["deleted"] == [dock.id]
 
 
 # ===========================================================================

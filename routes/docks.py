@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from services.database import get_db_session  # adjust
 from schema import DockConfig, Dock
-from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate
+from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate, DockBulkUpdate, DockBulkDelete
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
 from definitions import DockType
 from services.redis_dock_runtime import redis_client_from_env, get_active_dock_config_id, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state, get_all_dock_states, get_active_docks
@@ -113,48 +113,44 @@ def update_config(config_id: int, payload: DockConfigUpdate, db: Session = Depen
     db.refresh(cfg)
     return cfg
 
-@router.put("/update_dock", response_model=DockOut)
-def update_dock(dock_db_id: int, payload: DockUpdate, db: Session = Depends(get_db_session)):
-    dock = db.query(Dock).filter(Dock.id == dock_db_id).first()
-    if not dock:
-        raise HTTPException(status_code=404, detail="Dock not found")
+@router.put("/update_dock", response_model=list[DockOut])
+def update_dock(payload: list[DockBulkUpdate], db: Session = Depends(get_db_session)):
+    updated_docks = []
+    for p in payload:
+        dock = db.query(Dock).filter(Dock.id == p.id).first()
+        if not dock:
+            raise HTTPException(status_code=404, detail=f"Dock with id {p.id} not found")
 
-    if payload.dock_id:
-        exists = db.query(Dock).filter(
-            Dock.dock_id == payload.dock_id,
-            Dock.config_id == dock.config_id,
-            Dock.id != dock_db_id
-        ).first()
+        if p.dock_id:
+            exists = db.query(Dock).filter(
+                Dock.dock_id == p.dock_id,
+                Dock.config_id == dock.config_id,
+                Dock.id != p.id
+            ).first()
+            if exists:
+                raise HTTPException(status_code=409, detail="Dock ID already exists in this config")
 
-        if exists:
-            raise HTTPException(
-                status_code=409,
-                detail="Dock ID already exists in this config"
-            )
-        
-    if payload.aruco_id is not None:
-        exists_aruco = db.query(Dock).filter(
-            Dock.aruco_id == payload.aruco_id,
-            Dock.config_id == dock.config_id,
-            Dock.id != dock_db_id
-        ).first()
+        if p.aruco_id is not None:
+            exists_aruco = db.query(Dock).filter(
+                Dock.aruco_id == p.aruco_id,
+                Dock.config_id == dock.config_id,
+                Dock.id != p.id
+            ).first()
+            if exists_aruco:
+                raise HTTPException(status_code=409, detail="Aruco ID already exists in this config")
 
-        if exists_aruco:
-            raise HTTPException(
-                status_code=409,
-                detail="Aruco ID already exists in this config"
-            )
-        
-    dock.dock_id = payload.dock_id or dock.dock_id
-    dock.dock_type = payload.dock_type or dock.dock_type
-    dock.aruco_id = payload.aruco_id if payload.aruco_id is not None else dock.aruco_id
-    dock.x = payload.x if payload.x is not None else dock.x
-    dock.y = payload.y if payload.y is not None else dock.y
-    dock.theta = payload.theta if payload.theta is not None else dock.theta
+        dock.dock_id = p.dock_id or dock.dock_id
+        dock.dock_type = p.dock_type or dock.dock_type
+        dock.aruco_id = p.aruco_id if p.aruco_id is not None else dock.aruco_id
+        dock.x = p.x if p.x is not None else dock.x
+        dock.y = p.y if p.y is not None else dock.y
+        dock.theta = p.theta if p.theta is not None else dock.theta
+        updated_docks.append(dock)
 
     db.commit()
-    db.refresh(dock)
-    return dock
+    for dock in updated_docks:
+        db.refresh(dock)
+    return updated_docks
 
 @router.delete("/delete_config")
 def delete_config(config_id: int, db: Session = Depends(get_db_session)):
@@ -168,15 +164,19 @@ def delete_config(config_id: int, db: Session = Depends(get_db_session)):
     return {"success": True}
 
 @router.delete("/delete_dock")
-def delete_dock(dock_db_id: int, db: Session = Depends(get_db_session)):
-    dock = db.query(Dock).filter(Dock.id == dock_db_id).first()
-    if not dock:
-        raise HTTPException(status_code=404, detail="Dock not found")
+def delete_dock(payload: DockBulkDelete, db: Session = Depends(get_db_session)):
+    to_delete = []
+    for dock_id in payload.ids:
+        dock = db.query(Dock).filter(Dock.id == dock_id).first()
+        if not dock:
+            raise HTTPException(status_code=404, detail=f"Dock with id {dock_id} not found")
+        to_delete.append(dock)
 
-    db.delete(dock)
+    for dock in to_delete:
+        db.delete(dock)
     db.commit()
 
-    return {"success": True}
+    return {"deleted": payload.ids}
 
 @router.post("/activate")
 def activate_config(config_id: int, db: Session = Depends(get_db_session)):

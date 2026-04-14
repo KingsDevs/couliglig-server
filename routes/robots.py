@@ -7,7 +7,7 @@ import requests
 from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from models import RobotRegistration, RobotStatus, RobotStatusesResponse, RobotOnline, RobotOnlineResponse
-from models.robot_infos import RobotInfoDef
+from models.robot_infos import RobotInfoDef, RobotInfoUpdate, RobotInfoBulkDelete
 from schema import RobotInfo, MapConfig
 from services import register_host
 from dotenv import load_dotenv
@@ -316,6 +316,66 @@ def create_robot_info(infos: list[RobotInfoDef], db: Session = Depends(get_db_se
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+
+@register_router.put("/infos", response_model=list[RobotInfoDef])
+def update_robot_infos(infos: list[RobotInfoUpdate], db: Session = Depends(get_db_session)):
+    try:
+        updated_infos = []
+        for info in infos:
+            existing = db.query(RobotInfo).filter(RobotInfo.id == info.id).first()
+            if not existing:
+                raise HTTPException(status_code=404, detail=f"Robot info with id {info.id} not found")
+
+            map_cfg = db.query(MapConfig).filter(MapConfig.id == info.map_id).first()
+            if not map_cfg:
+                raise HTTPException(status_code=404, detail=f"Map config {info.map_id} not found")
+
+            conflict = db.query(RobotInfo).filter(
+                RobotInfo.map_id == info.map_id,
+                RobotInfo.robot_name == info.robot_name,
+                RobotInfo.id != info.id
+            ).first()
+            if conflict:
+                raise HTTPException(status_code=409, detail=f"Another robot info with name '{info.robot_name}' already exists on map {info.map_id}")
+
+            existing.robot_name = info.robot_name
+            existing.initial_x = info.initial_x
+            existing.initial_y = info.initial_y
+            existing.initial_theta = info.initial_theta
+            existing.map_id = info.map_id
+            updated_infos.append(existing)
+
+        db.commit()
+        for info in updated_infos:
+            db.refresh(info)
+
+        return updated_infos
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@register_router.delete("/infos/bulk")
+def delete_robot_infos_bulk(payload: RobotInfoBulkDelete, db: Session = Depends(get_db_session)):
+    try:
+        to_delete = []
+        for rid in payload.ids:
+            existing = db.query(RobotInfo).filter(RobotInfo.id == rid).first()
+            if not existing:
+                raise HTTPException(status_code=404, detail=f"Robot info with id {rid} not found")
+            to_delete.append(existing)
+
+        for info in to_delete:
+            db.delete(info)
+        db.commit()
+
+        return {"deleted": payload.ids}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @register_router.delete("/infos")
 def delete_robot_info(map_id: int, db: Session = Depends(get_db_session)):
