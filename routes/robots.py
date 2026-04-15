@@ -7,7 +7,7 @@ import requests
 from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from models import RobotRegistration, RobotStatus, RobotStatusesResponse, RobotOnline, RobotOnlineResponse
-from models.robot_infos import RobotInfoDef, RobotInfoUpdate, RobotInfoBulkDelete
+from models.robot_infos import RobotInfoDef, RobotInfoCreate, RobotInfoUpdate, RobotInfoBulkDelete
 from schema import RobotInfo, MapConfig
 from services import register_host
 from dotenv import load_dotenv
@@ -318,7 +318,7 @@ def create_robot_info(infos: list[RobotInfoDef], db: Session = Depends(get_db_se
     
 
 @register_router.post("/infos/upsert", response_model=list[RobotInfoDef])
-def upsert_robot_infos(infos: list[RobotInfoDef], db: Session = Depends(get_db_session)):
+def upsert_robot_infos(infos: list[RobotInfoCreate], db: Session = Depends(get_db_session)):
     try:
         result_infos = []
         for info in infos:
