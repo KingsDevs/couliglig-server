@@ -115,6 +115,57 @@ def update_config(config_id: int, payload: DockConfigUpdate, db: Session = Depen
     db.refresh(cfg)
     return cfg
 
+@router.post("/upsert_dock", response_model=list[DockOut])
+def upsert_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)):
+    result_docks = []
+    for p in payload:
+        cfg = db.query(DockConfig).filter(DockConfig.id == p.config_id).first()
+        if not cfg:
+            raise HTTPException(status_code=404, detail=f"Config {p.config_id} not found")
+
+        existing = db.query(Dock).filter(
+            Dock.dock_id == p.dock_id,
+            Dock.config_id == p.config_id,
+        ).first()
+
+        aruco_conflict_query = db.query(Dock).filter(
+            Dock.aruco_id == p.aruco_id,
+            Dock.config_id == p.config_id,
+        )
+        if existing:
+            aruco_conflict_query = aruco_conflict_query.filter(Dock.id != existing.id)
+        if aruco_conflict_query.first():
+            raise HTTPException(
+                status_code=409,
+                detail="Aruco ID already exists in the specified config",
+            )
+
+        if existing:
+            existing.dock_type = p.dock_type
+            existing.aruco_id = p.aruco_id
+            existing.x = p.x
+            existing.y = p.y
+            existing.theta = p.theta
+            result_docks.append(existing)
+        else:
+            dock = Dock(
+                config_id=p.config_id,
+                dock_id=p.dock_id,
+                dock_type=p.dock_type,
+                aruco_id=p.aruco_id,
+                x=p.x,
+                y=p.y,
+                theta=p.theta,
+            )
+            db.add(dock)
+            result_docks.append(dock)
+
+    db.commit()
+    for dock in result_docks:
+        db.refresh(dock)
+    return result_docks
+
+
 @router.put("/update_dock", response_model=list[DockOut])
 def update_dock(payload: list[DockBulkUpdate], db: Session = Depends(get_db_session)):
     updated_docks = []

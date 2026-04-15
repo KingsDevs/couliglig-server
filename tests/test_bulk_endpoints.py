@@ -319,6 +319,94 @@ class TestBulkUpdateDock:
 
 
 # ===========================================================================
+# POST /dock/upsert_dock  –  bulk upsert
+# ===========================================================================
+
+class TestUpsertDock:
+
+    def test_inserts_when_dock_does_not_exist(self, client, db_session):
+        cfg = DockConfig(name="upsert_cfg")
+        db_session.add(cfg)
+        db_session.commit()
+
+        resp = client.post("/dock/upsert_dock", json=[{
+            "config_id": cfg.id, "dock_id": "new_dock", "dock_type": "pickup",
+            "aruco_id": 5, "x": 1.0, "y": 2.0, "theta": 0.5,
+        }])
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["dock_id"] == "new_dock"
+        assert data[0]["aruco_id"] == 5
+        assert db_session.query(Dock).filter(Dock.config_id == cfg.id).count() == 1
+
+    def test_updates_when_dock_exists(self, client, db_session):
+        config_id, (dock_id,) = _seed_dock_config_and_docks(db_session, count=1)
+
+        resp = client.post("/dock/upsert_dock", json=[{
+            "config_id": config_id, "dock_id": "dock_0", "dock_type": "receiver",
+            "aruco_id": 1, "x": 99.0, "y": 88.0, "theta": 1.5,
+        }])
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["id"] == dock_id  # same primary key — updated, not inserted
+        assert data[0]["x"] == 99.0
+        assert data[0]["dock_type"] == "receiver"
+        # still only 1 dock for this config
+        assert db_session.query(Dock).filter(Dock.config_id == config_id).count() == 1
+
+    def test_mixed_insert_and_update_in_one_payload(self, client, db_session):
+        config_id, (existing_id,) = _seed_dock_config_and_docks(db_session, count=1)
+
+        resp = client.post("/dock/upsert_dock", json=[
+            {"config_id": config_id, "dock_id": "dock_0", "dock_type": "pickup",
+             "aruco_id": 1, "x": 50.0, "y": 0.0, "theta": 0.0},
+            {"config_id": config_id, "dock_id": "brand_new", "dock_type": "pickup",
+             "aruco_id": 77, "x": 10.0, "y": 10.0, "theta": 0.0},
+        ])
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+        by_dock_id = {d["dock_id"]: d for d in data}
+        assert by_dock_id["dock_0"]["id"] == existing_id
+        assert by_dock_id["dock_0"]["x"] == 50.0
+        assert by_dock_id["brand_new"]["aruco_id"] == 77
+        assert db_session.query(Dock).filter(Dock.config_id == config_id).count() == 2
+
+    def test_returns_404_for_unknown_config(self, client, db_session):
+        resp = client.post("/dock/upsert_dock", json=[{
+            "config_id": 99999, "dock_id": "x", "dock_type": "pickup",
+            "aruco_id": 1, "x": 0.0, "y": 0.0, "theta": 0.0,
+        }])
+        assert resp.status_code == 404
+
+    def test_returns_409_on_aruco_conflict_with_different_dock(self, client, db_session):
+        """aruco_id=1 belongs to dock_0; trying to insert a new dock with aruco_id=1 should 409."""
+        config_id, _ = _seed_dock_config_and_docks(db_session, count=1)
+
+        resp = client.post("/dock/upsert_dock", json=[{
+            "config_id": config_id, "dock_id": "another", "dock_type": "pickup",
+            "aruco_id": 1, "x": 0.0, "y": 0.0, "theta": 0.0,
+        }])
+        assert resp.status_code == 409
+
+    def test_update_can_keep_own_aruco_id(self, client, db_session):
+        """Upserting an existing dock with its own aruco_id must not 409."""
+        config_id, (dock_id,) = _seed_dock_config_and_docks(db_session, count=1)
+
+        resp = client.post("/dock/upsert_dock", json=[{
+            "config_id": config_id, "dock_id": "dock_0", "dock_type": "pickup",
+            "aruco_id": 1, "x": 42.0, "y": 0.0, "theta": 0.0,
+        }])
+        assert resp.status_code == 200
+        assert resp.json()[0]["x"] == 42.0
+
+
+# ===========================================================================
 # DELETE /dock/delete_dock  –  bulk delete
 # ===========================================================================
 
@@ -353,3 +441,66 @@ class TestBulkDeleteDock:
         client.request("DELETE", "/dock/delete_dock", json={"ids": [dock_id, 99999]})
 
         assert db_session.query(Dock).filter(Dock.id == dock_id).first() is not None
+
+
+# ===========================================================================
+# POST /robots/infos/upsert  –  bulk upsert
+# ===========================================================================
+
+class TestUpsertRobotInfos:
+
+    def test_inserts_when_robot_info_does_not_exist(self, client, db_session):
+        map_id = _seed_map_config(db_session)
+
+        resp = client.post("/robots/infos/upsert", json=[{
+            "robot_name": "new_bot",
+            "initial_x": 1.0, "initial_y": 2.0, "initial_theta": 0.5,
+            "map_id": map_id,
+        }])
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["robot_name"] == "new_bot"
+        assert db_session.query(RobotInfo).count() == 1
+
+    def test_updates_when_robot_info_exists(self, client, db_session):
+        map_id = _seed_map_config(db_session)
+        (rid,) = _seed_robot_infos(db_session, map_id, count=1)
+
+        resp = client.post("/robots/infos/upsert", json=[{
+            "robot_name": "bot_0",  # existing
+            "initial_x": 99.0, "initial_y": 88.0, "initial_theta": 1.5,
+            "map_id": map_id,
+        }])
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["initial_x"] == 99.0
+        # No new row was created — same primary key reused
+        rows = db_session.query(RobotInfo).all()
+        assert len(rows) == 1
+        assert rows[0].id == rid
+
+    def test_mixed_insert_and_update(self, client, db_session):
+        map_id = _seed_map_config(db_session)
+        _seed_robot_infos(db_session, map_id, count=1)  # bot_0 exists
+
+        resp = client.post("/robots/infos/upsert", json=[
+            {"robot_name": "bot_0", "initial_x": 10.0, "initial_y": 0.0, "initial_theta": 0.0, "map_id": map_id},
+            {"robot_name": "bot_new", "initial_x": 20.0, "initial_y": 0.0, "initial_theta": 0.0, "map_id": map_id},
+        ])
+
+        assert resp.status_code == 200
+        assert db_session.query(RobotInfo).count() == 2
+        names = {r.robot_name for r in db_session.query(RobotInfo).all()}
+        assert names == {"bot_0", "bot_new"}
+
+    def test_returns_404_for_unknown_map_id(self, client, db_session):
+        resp = client.post("/robots/infos/upsert", json=[{
+            "robot_name": "ghost",
+            "initial_x": 0.0, "initial_y": 0.0, "initial_theta": 0.0,
+            "map_id": 99999,
+        }])
+        assert resp.status_code == 404

@@ -317,6 +317,47 @@ def create_robot_info(infos: list[RobotInfoDef], db: Session = Depends(get_db_se
         raise HTTPException(status_code=500, detail=str(e))
     
 
+@register_router.post("/infos/upsert", response_model=list[RobotInfoDef])
+def upsert_robot_infos(infos: list[RobotInfoDef], db: Session = Depends(get_db_session)):
+    try:
+        result_infos = []
+        for info in infos:
+            map_cfg = db.query(MapConfig).filter(MapConfig.id == info.map_id).first()
+            if not map_cfg:
+                raise HTTPException(status_code=404, detail=f"Map config {info.map_id} not found")
+
+            existing = db.query(RobotInfo).filter(
+                RobotInfo.map_id == info.map_id,
+                RobotInfo.robot_name == info.robot_name,
+            ).first()
+
+            if existing:
+                existing.initial_x = info.initial_x
+                existing.initial_y = info.initial_y
+                existing.initial_theta = info.initial_theta
+                result_infos.append(existing)
+            else:
+                new_info = RobotInfo(
+                    robot_name=info.robot_name,
+                    initial_x=info.initial_x,
+                    initial_y=info.initial_y,
+                    initial_theta=info.initial_theta,
+                    map_id=info.map_id,
+                )
+                db.add(new_info)
+                result_infos.append(new_info)
+
+        db.commit()
+        for info in result_infos:
+            db.refresh(info)
+
+        return result_infos
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @register_router.put("/infos", response_model=list[RobotInfoDef])
 def update_robot_infos(infos: list[RobotInfoUpdate], db: Session = Depends(get_db_session)):
     try:
