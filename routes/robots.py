@@ -276,9 +276,9 @@ def get_online_robots():
     
 
 @register_router.get("/infos", response_model=list[RobotInfoDef])
-def get_robot_infos(db: Session = Depends(get_db_session)):
+def get_robot_infos(map_id: int, db: Session = Depends(get_db_session)):
     try:
-        infos = db.query(RobotInfo).all()
+        infos = db.query(RobotInfo).filter(RobotInfo.map_id == map_id).all()
         return infos
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
