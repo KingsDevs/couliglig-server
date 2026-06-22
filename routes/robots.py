@@ -291,7 +291,7 @@ def get_robot_infos(map_id: int, db: Session = Depends(get_db_session)):
         raise HTTPException(status_code=500, detail=str(e))
     
 @register_router.post("/infos", response_model=list[RobotInfoDef])
-def create_robot_info(infos: list[RobotInfoDef], db: Session = Depends(get_db_session)):
+def create_robot_info(infos: list[RobotInfoCreate], db: Session = Depends(get_db_session)):
     try:
         created_infos = []
         for info in infos:
