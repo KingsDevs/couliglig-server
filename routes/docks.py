@@ -33,6 +33,18 @@ def list_configs(db: Session = Depends(get_db_session)):
     active_config = get_active_dock_config_id(redis_client)
     configs = db.query(DockConfig).all()
 
+    # Map each dock config to its robot infos via MapConfig
+    # (DockConfig.id -> MapConfig.dock_config_id, MapConfig.id -> RobotInfo.map_id)
+    map_to_config = {
+        m.id: m.dock_config_id
+        for m in db.query(MapConfig.id, MapConfig.dock_config_id).all()
+    }
+    robot_infos_by_config = {}
+    for info in db.query(RobotInfo).all():
+        config_id = map_to_config.get(info.map_id)
+        if config_id is not None:
+            robot_infos_by_config.setdefault(config_id, []).append(info)
+
     config_outs = []
     for cfg in configs:
         is_active = str(cfg.id) == active_config if active_config else False
@@ -41,8 +53,9 @@ def list_configs(db: Session = Depends(get_db_session)):
             name=cfg.name,
             description=cfg.description,
             is_active=is_active,
+            robot_infos=robot_infos_by_config.get(cfg.id, []),
         ))
-    
+
     return config_outs
 
 @router.get("", response_model=list[DockOut])

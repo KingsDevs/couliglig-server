@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from definitions import DockType
+from models.robot_infos import RobotInfoDef
 
 class DockConfigCreate(BaseModel):
     name: str = Field(min_length=1)
@@ -15,6 +16,7 @@ class DockConfigOut(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool = False
+    robot_infos: List[RobotInfoDef] = []
 
     class Config:
         from_attributes = True
