@@ -48,7 +48,7 @@ async def _broadcast_online():
         _dashboard_subscribers.discard(ws)
 
 
-def _register_robot_in_redis(hostname: str, ip: str, namespace: str, ros_domain_id: int):
+def _register_robot_in_redis(hostname: str, ip: str, namespace: str, ros_domain_id: int, battery: float | None = None):
     existing = redis_client.get("robot_ips")
     ip_dict = json.loads(existing) if existing else {}
     ip_dict[hostname] = {
@@ -56,18 +56,21 @@ def _register_robot_in_redis(hostname: str, ip: str, namespace: str, ros_domain_
         "ip": ip,
         "namespace": namespace,
         "ros_domain_id": ros_domain_id,
+        "battery": battery,
         "timestamp": datetime.now().isoformat() + "Z",
     }
     redis_client.set("robot_ips", json.dumps(ip_dict))
 
 
-def _update_robot_timestamp(hostname: str):
+def _update_robot_timestamp(hostname: str, battery: float | None = None):
     existing = redis_client.get("robot_ips")
     if not existing:
         return
     ip_dict = json.loads(existing)
     if hostname in ip_dict:
         ip_dict[hostname]["timestamp"] = datetime.now().isoformat() + "Z"
+        if battery is not None:
+            ip_dict[hostname]["battery"] = battery
         redis_client.set("robot_ips", json.dumps(ip_dict))
 
 
@@ -92,16 +95,18 @@ async def robot_websocket(websocket: WebSocket):
         ip = data["ip"]
         namespace = data.get("namespace", "couliglig")
         ros_domain_id = data.get("ros_domain_id", 0)
+        battery = data.get("battery")
 
-        _register_robot_in_redis(hostname, ip, namespace, ros_domain_id)
+        _register_robot_in_redis(hostname, ip, namespace, ros_domain_id, battery)
         logging.info(f"[robot-ws] {hostname} ({ip}) connected")
         await _broadcast_online()
 
         while True:
             msg = await asyncio.wait_for(websocket.receive_json(), timeout=15)
             if msg.get("type") == "heartbeat":
-                _update_robot_timestamp(hostname)
+                _update_robot_timestamp(hostname, msg.get("battery"))
                 logging.debug(f"[robot-ws] {hostname} heartbeat")
+                await _broadcast_online()
 
     except (WebSocketDisconnect, asyncio.TimeoutError) as e:
         logging.warning(f"[robot-ws] {hostname} disconnected ({type(e).__name__})")
@@ -159,6 +164,7 @@ def register_robot(data: RobotRegistration):
                 "ip": str(data.ip),
                 "namespace": data.namespace or "couliglig",
                 "ros_domain_id": data.ros_domain_id or 0,
+                "battery": data.battery,
                 "timestamp": datetime.now().isoformat() + "Z"
             }
 
@@ -265,7 +271,8 @@ def get_online_robots():
                     ip=payload.get("ip"),
                     namespace=f"couliglig_bot_{payload.get('ros_domain_id', 0)}",
                     ros_domain_id=payload.get("ros_domain_id", 0),
-                    timestamp=payload.get("timestamp", "")
+                    timestamp=payload.get("timestamp", ""),
+                    battery=payload.get("battery")
                 )
             )
 
