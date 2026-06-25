@@ -19,11 +19,11 @@ services:
       - redis
     restart: always
     volumes:
-      # dnsmasq-managed hosts file (host → container)
-      - /var/lib/dnsmasq/robots.hosts:/data/robots.hosts
       - ./db:/app/db
-    environment:
-      - HOSTS_FILE=/data/robots.hosts
+      # Optional dnsmasq-managed hosts file (host -> container)
+      # - /var/lib/dnsmasq/robots.hosts:/data/robots.hosts
+    # environment:
+    #   - HOSTS_FILE=/data/robots.hosts
     ports:
       - "8000:8000"
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
