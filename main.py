@@ -3,16 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes import register_router, docks_router, maps_router, actions_router, rl_router
 from fastapi.responses import HTMLResponse
 from services import get_db_session
+from services.register_host import get_hosts_file
 from fastapi.staticfiles import StaticFiles
 import html
-import os
 
 # Establish a database session at startup to ensure the database is initialized
 session = get_db_session()
 session.close()
-
-HOSTS_FILE = os.getenv("HOSTS_FILE", "/data/robots.hosts")
-# HOSTS_FILE = "/home/karlshane/couliglig-server/temp.hosts"
 
 app = FastAPI()
 
@@ -32,8 +29,12 @@ app.include_router(rl_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 def read_hosts_lines() -> list[str]:
+    hosts_file = get_hosts_file()
+    if not hosts_file:
+        return []
+
     try:
-        with open(HOSTS_FILE, "r") as f:
+        with open(hosts_file, "r") as f:
             lines = f.readlines()
     except FileNotFoundError:
         return []
@@ -43,7 +44,9 @@ def read_hosts_lines() -> list[str]:
 
 @app.get("/", response_class=HTMLResponse)
 def index():
+    hosts_file = get_hosts_file()
     lines = read_hosts_lines()
+    hosts_file_label = hosts_file if hosts_file else "disabled (HOSTS_FILE unset)"
 
     rows = []
     for line in lines:
@@ -74,7 +77,7 @@ def index():
 </head>
 <body>
   <h2>Robot Registry</h2>
-  <p>File: <code>{html.escape(HOSTS_FILE)}</code></p>
+  <p>File: <code>{html.escape(hosts_file_label)}</code></p>
   <p>Auto-refresh: 3s</p>
 
   <table>
