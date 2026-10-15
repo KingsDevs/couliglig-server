@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 
 from services.database import get_db_session  # adjust
+from services.dock_service import create_docks
 from schema import DockConfig, Dock, MapConfig, RobotInfo
 from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate, DockBulkUpdate, DockBulkDelete
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
@@ -64,56 +65,7 @@ def list_docks(config_id: int, db: Session = Depends(get_db_session)):
 
 @router.post("/create_dock", response_model=list[DockOut])
 def create_dock(payload: list[DockCreate], db: Session = Depends(get_db_session)):
-
-    docks = []
-
-    for p in payload:
-
-        cfg = db.query(DockConfig).filter(DockConfig.id == p.config_id).first()
-        if not cfg:
-            raise HTTPException(status_code=404, detail="Config not found")
-
-        exists = db.query(Dock).filter(
-            Dock.dock_id == p.dock_id,
-            Dock.config_id == p.config_id
-        ).first()
-
-        if exists:
-            raise HTTPException(
-                status_code=409,
-                detail="Dock ID already exists in the specified config"
-            )
-        
-        exists_aruco = db.query(Dock).filter(
-            Dock.aruco_id == p.aruco_id,
-            Dock.config_id == p.config_id
-        ).first()
-
-        if exists_aruco:
-            raise HTTPException(
-                status_code=409,
-                detail="Aruco ID already exists in the specified config"
-            )
-
-        dock = Dock(
-            config_id=p.config_id,
-            dock_id=p.dock_id,
-            dock_type=p.dock_type,
-            aruco_id=p.aruco_id,
-            x=p.x,
-            y=p.y,
-            theta=p.theta,
-        )
-
-        db.add(dock)
-        docks.append(dock)
-
-    db.commit()
-
-    for dock in docks:
-        db.refresh(dock)
-
-    return docks
+    return create_docks(db, payload)
 
 @router.put("/update_config", response_model=DockConfigOut)
 def update_config(config_id: int, payload: DockConfigUpdate, db: Session = Depends(get_db_session)):

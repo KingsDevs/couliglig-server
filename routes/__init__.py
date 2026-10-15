@@ -3,3 +3,4 @@ from .docks import router as docks_router
 from .maps import router as maps_router
 from .actions import router as actions_router
 from .rl import router as rl_router
+from .mapping import router as mapping_router

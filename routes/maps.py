@@ -1,17 +1,14 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-from pathlib import Path
 from models.maps_schema import MapConfigOut
 import shutil
 
 from services.database import get_db_session
+from services.map_storage import MAP_STORAGE, store_map_files
 from schema import MapConfig, DockConfig
 
 router = APIRouter(prefix="/map", tags=["map"])
-
-MAP_STORAGE = Path("db/maps")
-MAP_STORAGE.mkdir(exist_ok=True)
 
 
 @router.get("", response_model=list[MapConfigOut])
@@ -26,85 +23,15 @@ def upload_map(
     db: Session = Depends(get_db_session)
 ):
 
-    cfg = db.query(DockConfig).filter(DockConfig.id == dock_config_id).first()
-    if not cfg:
-        raise HTTPException(status_code=404, detail="Dock config not found")
-    
-    dock_config_id_exists = db.query(MapConfig).filter(MapConfig.dock_config_id == dock_config_id).first()
-    if dock_config_id_exists:
-        raise HTTPException(status_code=409, detail="A map config for the specified dock config already exists")
-
-    yaml_filename = map_yaml.filename
-    image_filename = map_image.filename
-
-    # ----------------------------
-    # DB VALIDATION
-    # ----------------------------
-
-    existing_yaml = db.query(MapConfig).filter(
-        MapConfig.map_yaml_filename == yaml_filename
-    ).first()
-
-    if existing_yaml:
-        raise HTTPException(
-            status_code=409,
-            detail="YAML filename already exists"
-        )
-
-    existing_image = db.query(MapConfig).filter(
-        MapConfig.map_image_filename == image_filename
-    ).first()
-
-    if existing_image:
-        raise HTTPException(
-            status_code=409,
-            detail="Image filename already exists"
-        )
-
-    # ----------------------------
-    # FILESYSTEM VALIDATION
-    # ----------------------------
-
-    yaml_path = MAP_STORAGE / yaml_filename
-    image_path = MAP_STORAGE / image_filename
-
-    if yaml_path.exists():
-        raise HTTPException(
-            status_code=409,
-            detail="YAML file already exists on disk"
-        )
-
-    if image_path.exists():
-        raise HTTPException(
-            status_code=409,
-            detail="Image file already exists on disk"
-        )
-
-    # ----------------------------
-    # SAVE FILES
-    # ----------------------------
-
-    with open(yaml_path, "wb") as buffer:
-        shutil.copyfileobj(map_yaml.file, buffer)
-
-    with open(image_path, "wb") as buffer:
-        shutil.copyfileobj(map_image.file, buffer)
-
-    # ----------------------------
-    # SAVE DB RECORD
-    # ----------------------------
-
-    map_cfg = MapConfig(
-        dock_config_id=dock_config_id,
-        map_yaml_filename=yaml_filename,
-        map_image_filename=image_filename
+    return store_map_files(
+        db,
+        dock_config_id,
+        map_yaml.filename,
+        map_yaml.file.read(),
+        map_image.filename,
+        map_image.file.read(),
+        storage_dir=MAP_STORAGE,
     )
-
-    db.add(map_cfg)
-    db.commit()
-    db.refresh(map_cfg)
-
-    return map_cfg
 
 @router.put("/update", response_model=MapConfigOut)
 def update_map(
