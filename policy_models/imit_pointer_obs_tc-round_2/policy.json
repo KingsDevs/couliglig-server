@@ -1,0 +1,180 @@
+{
+  "checkpoint": "/home/karlshane/marl-couliglig/results/imit_pointer_obs_tc/round_2",
+  "model": "entity_pointer_network",
+  "obs_features": [
+    "competition",
+    "timing"
+  ],
+  "k": {
+    "k_items": 10,
+    "k_transporters": 5,
+    "k_pickers": 5,
+    "k_zones": 5,
+    "k_carried": 10,
+    "k_pending": 10
+  },
+  "action_layout": {
+    "picker": [
+      [
+        "items",
+        10
+      ],
+      [
+        "transporters",
+        5
+      ]
+    ],
+    "transporter": [
+      [
+        "zones",
+        5
+      ],
+      [
+        "carried",
+        10
+      ]
+    ]
+  },
+  "scales": {
+    "dist_half_cells": 50,
+    "dir_half_cells": 50,
+    "weight_scale": 10,
+    "time_half_steps": 10,
+    "agent_speed": 5
+  },
+  "inputs": {
+    "picker": [
+      [
+        "obs_vec",
+        [
+          4
+        ]
+      ],
+      [
+        "action_mask",
+        [
+          16
+        ]
+      ],
+      [
+        "items",
+        [
+          10,
+          6
+        ]
+      ],
+      [
+        "items_mask",
+        [
+          10
+        ]
+      ],
+      [
+        "pickers",
+        [
+          5,
+          6
+        ]
+      ],
+      [
+        "pickers_mask",
+        [
+          5
+        ]
+      ],
+      [
+        "transporters",
+        [
+          5,
+          8
+        ]
+      ],
+      [
+        "transporters_mask",
+        [
+          5
+        ]
+      ]
+    ],
+    "transporter": [
+      [
+        "obs_vec",
+        [
+          7
+        ]
+      ],
+      [
+        "action_mask",
+        [
+          16
+        ]
+      ],
+      [
+        "carried",
+        [
+          10,
+          4
+        ]
+      ],
+      [
+        "carried_mask",
+        [
+          10
+        ]
+      ],
+      [
+        "pending",
+        [
+          10,
+          5
+        ]
+      ],
+      [
+        "pending_mask",
+        [
+          10
+        ]
+      ],
+      [
+        "pickers",
+        [
+          5,
+          7
+        ]
+      ],
+      [
+        "pickers_mask",
+        [
+          5
+        ]
+      ],
+      [
+        "transporters",
+        [
+          5,
+          7
+        ]
+      ],
+      [
+        "transporters_mask",
+        [
+          5
+        ]
+      ],
+      [
+        "zones",
+        [
+          5,
+          4
+        ]
+      ],
+      [
+        "zones_mask",
+        [
+          5
+        ]
+      ]
+    ]
+  },
+  "output": "logits"
+}

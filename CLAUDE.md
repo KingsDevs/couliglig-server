@@ -17,7 +17,7 @@ uvicorn main:app --reload
 
 **Run tests:**
 ```bash
-pytest tests/test_dock_runtime.py -v
+pytest tests -v
 ```
 
 **Run a single test:**
@@ -67,6 +67,16 @@ Lock lifetimes (the `lock:dock:*` key is the source of truth; the `dock:*` hash 
 ### RL observation endpoint
 
 `GET /rl/builder-inputs?robot_id={id}` (in `routes/rl.py`) returns the full environment state for RL training — dock states, item weights, robot poses (fetched live from each robot's `/roslib/transform`), picker/transporter agent states, and a deterministic `action_map` with padded indices (MAX_ITEMS=20, MAX_WZ=8, MAX_PICKERS=10, MAX_TRANSPORTERS=5).
+
+### Fleet coordinator (in progress, replaces the endpoint above)
+
+`coordinator/` is the new central decision layer (design: the "Couliglig MARL Deployment Redesign" doc). It is a Python port of couliglig-gamesim's policy layer:
+
+- `coordinator/spec/` — `World` snapshot in grid cells (port of gamesim `PolicyWorld`), `observe()` (port of `RLObserver`, mirrors marl-couliglig `PickerTransporterEnv1` observations), `policy.json` loader. Masks are the env's rules narrowed by a `Feasibility` object (`EnvRules` = env rules only).
+- `coordinator/policies/` — `MarlOnnxPolicy` (onnxruntime, in-process), `GreedyPolicy`, `StayPolicy`, `FallbackPolicy` (per-robot substitution on timeout, error or illegal index), `decode()` from action index to verb + target.
+- `policy_models/<name>/` — an exported model directory from gamesim's `tools/export_policy.py` (`--out` can write here directly): `picker.onnx`, `transporter.onnx`, `policy.json`, `fixtures.json`. Loading a directory re-runs every fixture through the observer and the ONNX models and refuses it on any mismatch. (`models/` is the pydantic package, hence the different name.)
+
+Tests: `pytest tests/test_coordinator_policy.py -v` (observer, heuristics and ONNX against the fixtures).
 
 ### Test isolation
 
