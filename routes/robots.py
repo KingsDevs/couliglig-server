@@ -1,4 +1,5 @@
 import json
+import uuid
 import asyncio
 import logging
 import redis
@@ -10,6 +11,9 @@ from models import RobotRegistration, RobotStatus, RobotStatusesResponse, RobotO
 from models.robot_infos import RobotInfoDef, RobotInfoCreate, RobotInfoUpdate, RobotInfoBulkDelete
 from schema import RobotInfo, MapConfig
 from services import register_host
+from services.redis_dock_runtime import (
+    restore_robot_locks, shorten_robot_locks, DOCK_LOCK_DISCONNECT_GRACE_S,
+)
 from dotenv import load_dotenv
 from datetime import datetime
 from services.database import get_db_session
@@ -48,47 +52,99 @@ async def _broadcast_online():
         _dashboard_subscribers.discard(ws)
 
 
-def _register_robot_in_redis(hostname: str, ip: str, namespace: str, ros_domain_id: int, battery: float | None = None):
-    existing = redis_client.get("robot_ips")
-    ip_dict = json.loads(existing) if existing else {}
-    ip_dict[hostname] = {
-        "hostname": hostname,
-        "ip": ip,
-        "namespace": namespace,
-        "ros_domain_id": ros_domain_id,
-        "battery": battery,
-        "timestamp": datetime.now().isoformat() + "Z",
-    }
-    redis_client.set("robot_ips", json.dumps(ip_dict))
+def _robot_namespace(ros_domain_id) -> str:
+    """The robot_id robots use for dock locks (their ROS namespace)."""
+    return f"couliglig_bot_{ros_domain_id}"
 
 
-def _update_robot_timestamp(hostname: str, battery: float | None = None):
-    existing = redis_client.get("robot_ips")
-    if not existing:
-        return
-    ip_dict = json.loads(existing)
-    if hostname in ip_dict:
-        ip_dict[hostname]["timestamp"] = datetime.now().isoformat() + "Z"
+def _mutate_robot_ips(fn):
+    """Apply fn(ip_dict) to the robot_ips blob atomically (WATCH/MULTI).
+
+    fn mutates the dict in place and returns a result; the blob is written
+    back only if fn returns a truthy value. Concurrent handlers (the WebSocket
+    loop and the threadpool-run /register) can no longer drop each other's
+    updates.
+    """
+    with redis_client.pipeline() as pipe:
+        while True:
+            try:
+                pipe.watch("robot_ips")
+                raw = pipe.get("robot_ips")
+                ip_dict = json.loads(raw) if raw else {}
+                result = fn(ip_dict)
+                pipe.multi()
+                if result:
+                    pipe.set("robot_ips", json.dumps(ip_dict))
+                pipe.execute()
+                return result
+            except redis.WatchError:
+                continue
+
+
+def _register_robot_in_redis(hostname: str, ip: str, namespace: str, ros_domain_id: int,
+                             battery: float | None = None, session: str | None = None):
+    def fn(ip_dict):
+        ip_dict[hostname] = {
+            "hostname": hostname,
+            "ip": ip,
+            "namespace": namespace,
+            "ros_domain_id": ros_domain_id,
+            "battery": battery,
+            "timestamp": datetime.now().isoformat() + "Z",
+            "session": session,
+        }
+        return True
+    _mutate_robot_ips(fn)
+
+
+def _update_robot_timestamp(hostname: str, battery: float | None = None, session: str | None = None,
+                            registration: dict | None = None):
+    """Refresh a robot's heartbeat. Re-adds the entry if it has gone missing.
+
+    Does nothing if a newer connection (different session) now owns the entry.
+    """
+    def fn(ip_dict):
+        entry = ip_dict.get(hostname)
+        if entry is None:
+            if registration is None:
+                return False
+            entry = dict(registration)
+            ip_dict[hostname] = entry
+        elif session is not None and entry.get("session") not in (None, session):
+            return False
+        entry["timestamp"] = datetime.now().isoformat() + "Z"
         if battery is not None:
-            ip_dict[hostname]["battery"] = battery
-        redis_client.set("robot_ips", json.dumps(ip_dict))
+            entry["battery"] = battery
+        return True
+    _mutate_robot_ips(fn)
 
 
-def _remove_robot_from_redis(hostname: str):
-    existing = redis_client.get("robot_ips")
-    if not existing:
-        return
-    ip_dict = json.loads(existing)
-    if hostname in ip_dict:
+def _remove_robot_from_redis(hostname: str, session: str | None = None) -> bool:
+    """Remove a robot's entry. With a session, only if that session still owns it.
+
+    This stops the cleanup of an old socket from deleting the registration a
+    reconnecting robot has just made.
+    """
+    def fn(ip_dict):
+        entry = ip_dict.get(hostname)
+        if entry is None:
+            return False
+        if session is not None and isinstance(entry, dict) and entry.get("session") != session:
+            return False
         ip_dict.pop(hostname)
-        redis_client.set("robot_ips", json.dumps(ip_dict))
+        return True
+    removed = _mutate_robot_ips(fn)
+    if removed:
         logging.info(f"[robot-ws] {hostname} removed from robot_ips")
+    return bool(removed)
 
 
 @register_router.websocket("/ws")
 async def robot_websocket(websocket: WebSocket):
     await websocket.accept()
     hostname = None
+    session = uuid.uuid4().hex
+    registration = None
     try:
         data = await asyncio.wait_for(websocket.receive_json(), timeout=10)
         hostname = data["hostname"]
@@ -97,14 +153,21 @@ async def robot_websocket(websocket: WebSocket):
         ros_domain_id = data.get("ros_domain_id", 0)
         battery = data.get("battery")
 
-        _register_robot_in_redis(hostname, ip, namespace, ros_domain_id, battery)
-        logging.info(f"[robot-ws] {hostname} ({ip}) connected")
+        _register_robot_in_redis(hostname, ip, namespace, ros_domain_id, battery, session=session)
+        registration = {
+            "hostname": hostname, "ip": ip, "namespace": namespace,
+            "ros_domain_id": ros_domain_id, "battery": battery, "session": session,
+        }
+        restored = restore_robot_locks(redis_client, _robot_namespace(ros_domain_id))
+        logging.info(f"[robot-ws] {hostname} ({ip}) connected"
+                     + (f"; restored {len(restored)} dock lock(s)" if restored else ""))
         await _broadcast_online()
 
         while True:
             msg = await asyncio.wait_for(websocket.receive_json(), timeout=15)
             if msg.get("type") == "heartbeat":
-                _update_robot_timestamp(hostname, msg.get("battery"))
+                _update_robot_timestamp(hostname, msg.get("battery"), session=session,
+                                        registration=registration)
                 logging.debug(f"[robot-ws] {hostname} heartbeat")
                 await _broadcast_online()
 
@@ -113,8 +176,15 @@ async def robot_websocket(websocket: WebSocket):
     except Exception as e:
         logging.warning(f"[robot-ws] {hostname} error ({e})")
     finally:
-        if hostname:
-            _remove_robot_from_redis(hostname)
+        if hostname and _remove_robot_from_redis(hostname, session=session):
+            # Give the robot a short grace period to reconnect before its
+            # reservations expire, instead of holding them for the full TTL.
+            if registration is not None:
+                shortened = shorten_robot_locks(
+                    redis_client, _robot_namespace(registration["ros_domain_id"]))
+                if shortened:
+                    logging.warning(f"[robot-ws] {hostname}: {len(shortened)} dock lock(s) "
+                                    f"will expire in {DOCK_LOCK_DISCONNECT_GRACE_S}s unless it reconnects")
             await _broadcast_online()
 
 @register_router.websocket("/online/ws")
@@ -153,22 +223,21 @@ def register_robot(data: RobotRegistration):
             # Store the updated dictionary back in Redis
             redis_client.set("robot_registrations", json.dumps(robot_dict))  # Serialize dictionary to JSON
 
-            existing_ips = redis_client.get("robot_ips")
-            if existing_ips:
-                ip_dict = json.loads(existing_ips)
-            else:
-                ip_dict = {}
+            def upsert(ip_dict):
+                previous = ip_dict.get(data.hostname)
+                ip_dict[data.hostname] = {
+                    "hostname": data.hostname,
+                    "ip": str(data.ip),
+                    "namespace": data.namespace or "couliglig",
+                    "ros_domain_id": data.ros_domain_id or 0,
+                    "battery": data.battery,
+                    "timestamp": datetime.now().isoformat() + "Z",
+                    # keep the live WebSocket's ownership of this entry
+                    "session": previous.get("session") if isinstance(previous, dict) else None,
+                }
+                return True
 
-            ip_dict[data.hostname] = {
-                "hostname": data.hostname,
-                "ip": str(data.ip),
-                "namespace": data.namespace or "couliglig",
-                "ros_domain_id": data.ros_domain_id or 0,
-                "battery": data.battery,
-                "timestamp": datetime.now().isoformat() + "Z"
-            }
-
-            redis_client.set("robot_ips", json.dumps(ip_dict))
+            _mutate_robot_ips(upsert)
 
     except PermissionError:
         raise HTTPException(

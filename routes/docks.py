@@ -7,9 +7,9 @@ from services.database import get_db_session  # adjust
 from services.dock_service import create_docks
 from schema import DockConfig, Dock, MapConfig, RobotInfo
 from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate, DockBulkUpdate, DockBulkDelete
-from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest
+from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest, RenewDockRequest
 from definitions import DockType
-from services.redis_dock_runtime import redis_client_from_env, get_active_dock_config_id, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, get_dock_state, get_all_dock_states, get_active_docks
+from services.redis_dock_runtime import redis_client_from_env, get_active_dock_config_id, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, renew_dock, get_dock_state, get_all_dock_states, get_active_docks
 
 router = APIRouter(prefix="/dock", tags=["dock"])
 
@@ -317,6 +317,7 @@ def occupy(request: OccupyDockRequest):
             redis_client,
             request.dock_id,
             request.robot_id,
+            item_id=request.item_id,
         )
     except ValueError as e:
         raise HTTPException(
@@ -334,6 +335,7 @@ def release(request: ReleaseDockRequest):
             redis_client,
             request.dock_id,
             request.robot_id,
+            item_id=request.item_id,
         )
     except ValueError as e:
         raise HTTPException(
@@ -342,6 +344,23 @@ def release(request: ReleaseDockRequest):
         )
 
     return {"status": "ok"}
+
+
+@router.post("/renew")
+def renew(request: RenewDockRequest):
+    """Extend a reservation while the robot is still travelling to the dock.
+
+    409 means the reservation was lost (expired or taken): the robot must stop
+    using this dock and re-plan.
+    """
+    try:
+        ttl = renew_dock(redis_client, request.dock_id, request.robot_id)
+    except ValueError as e:
+        if "does not exist" in str(e):
+            raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return {"status": "ok", "ttl_s": ttl}
 
 @router.get("/dock_state")
 def dock_state(dock_id: str):

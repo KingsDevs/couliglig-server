@@ -1,10 +1,25 @@
 import json
+import os
 import time
 import redis
 import requests
 from schema import Dock
 from sqlalchemy.orm import Session
 from definitions import DockType, DockStatus
+
+
+# ---------------------------------------------------------
+# Dock lock lifetimes
+# ---------------------------------------------------------
+# A reservation expires unless its owner renews it (POST /dock/renew) or
+# occupies the dock. This keeps a crashed or rebooted robot from holding a
+# dock forever. A hand-off dock that has been occupied holds an item on the
+# transporter's slot, so its lock persists until the item is delivered.
+
+DOCK_LOCK_TTL_S = int(os.getenv("DOCK_LOCK_TTL_S", "300"))
+# When a robot's WebSocket drops, its expiring locks are cut to this grace
+# period. If the robot reconnects in time, they are restored to the full TTL.
+DOCK_LOCK_DISCONNECT_GRACE_S = int(os.getenv("DOCK_LOCK_DISCONNECT_GRACE_S", "30"))
 
 
 # ---------------------------------------------------------
@@ -54,35 +69,38 @@ def get_active_dock_config_id(r: redis.Redis) -> str:
 # Clear runtime
 # ---------------------------------------------------------
 
-def clear_all_dock_keys(r: redis.Redis) -> None:
-    r.set("active_dock_config", "none")
-    for pattern in ("dock:*", "dock_meta:*", "lock:dock:*"):
+_DOCK_KEY_PATTERNS = ("dock:*", "dock_meta:*", "lock:dock:*")
+_DOCK_SET_KEYS = ("docks:all", "docks:pickup", "docks:receiving")
+
+
+def _scan_keys(r: redis.Redis, patterns) -> list[str]:
+    found: list[str] = []
+    for pattern in patterns:
         cursor = 0
         while True:
             cursor, keys = r.scan(cursor=cursor, match=pattern, count=500)
-            if keys:
-                r.delete(*keys)
+            found.extend(keys)
             if cursor == 0:
                 break
-    try:
-        r.delete("docks:all")
-        r.delete("docks:pickup")
-        r.delete("docks:receiving")
-    except Exception as e:
-        print(f"Error clearing dock sets: {e}")
+    return found
+
+
+def clear_all_dock_keys(r: redis.Redis) -> None:
+    keys = _scan_keys(r, _DOCK_KEY_PATTERNS)
+    pipe = r.pipeline(transaction=True)
+    pipe.set("active_dock_config", "none")
+    if keys:
+        pipe.delete(*keys)
+    pipe.delete(*_DOCK_SET_KEYS)
+    pipe.execute()
 
 
 def clear_all_runtime_keys(r: redis.Redis) -> None:
     """Clears dock keys AND all robot/wz runtime keys."""
     clear_all_dock_keys(r)
-    for pattern in ("robot:pos:*", "robot:state:*", "wz:state:*", "dock_pos:*", "item:weight:*"):
-        cursor = 0
-        while True:
-            cursor, keys = r.scan(cursor=cursor, match=pattern, count=500)
-            if keys:
-                r.delete(*keys)
-            if cursor == 0:
-                break
+    keys = _scan_keys(r, ("robot:pos:*", "robot:state:*", "wz:state:*", "dock_pos:*", "item:weight:*"))
+    if keys:
+        r.delete(*keys)
 
 
 # ---------------------------------------------------------
@@ -90,14 +108,20 @@ def clear_all_runtime_keys(r: redis.Redis) -> None:
 # ---------------------------------------------------------
 
 def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> None:
-    """Initialize Redis runtime from SQLite dock config."""
-    clear_all_dock_keys(r)
+    """Initialize Redis runtime from SQLite dock config.
 
-    pipe = r.pipeline()
+    The old runtime is cleared and the new one written in a single MULTI/EXEC
+    transaction, so a failure cannot leave Redis half-cleared with the new
+    config already marked active.
+    """
+    docks = session.query(Dock).filter_by(config_id=dock_config_id).all()
+    stale_keys = _scan_keys(r, _DOCK_KEY_PATTERNS)
     now = int(time.time())
 
-    docks = session.query(Dock).filter_by(config_id=dock_config_id).all()
-    r.set("active_dock_config", dock_config_id)
+    pipe = r.pipeline(transaction=True)
+    if stale_keys:
+        pipe.delete(*stale_keys)
+    pipe.delete(*_DOCK_SET_KEYS)
 
     for d in docks:
         key = _dock_key(d.dock_type, d.dock_id)
@@ -119,13 +143,14 @@ def activate_docks(r: redis.Redis, session: Session, dock_config_id: int) -> Non
         )
         pipe.sadd("docks:all", d.dock_id)
 
-        # store dock (y, x) position if available on the model
-        if hasattr(d, "y") and hasattr(d, "x"):
+        # store dock (y, x) position if the dock has one
+        if d.x is not None and d.y is not None:
             pipe.hset(
                 f"dock_pos:{d.dock_id}",
                 mapping={"y": d.y, "x": d.x},
             )
 
+    pipe.set("active_dock_config", dock_config_id)
     pipe.execute()
 
 
@@ -223,7 +248,8 @@ def get_all_robot_positions(r: redis.Redis, robot_id: str) -> dict[str, tuple[st
         ip = payload.get("ip") if isinstance(payload, dict) else payload
         domain_id = payload.get("ros_domain_id") if isinstance(payload, dict) else None
 
-        if not ip or not domain_id:
+        # domain_id 0 is valid, so test for None rather than falsiness
+        if not ip or domain_id is None:
             continue
         try:
             resp = requests.get(f"http://{ip}:8000/roslib/transform", timeout=3)
@@ -296,9 +322,14 @@ def get_transporter_state(r: redis.Redis, agent_id: str) -> dict | None:
 
 
 def get_all_waiting_zone_states(r: redis.Redis) -> list[dict]:
-    """Returns all docks in docks:all whose dock_type is 'waiting_zone'."""
+    """Returns all docks in docks:all whose dock_type is 'waiting_zone'.
+
+    Sorted by dock_id, the same order build_action_map uses for wz_slots, so
+    observation row i and action slot i refer to the same zone.
+    """
+    reconcile_expired_locks(r)
     zones: list[dict] = []
-    dock_ids = r.smembers("docks:all")
+    dock_ids = sorted(r.smembers("docks:all"))
     for dock_id in dock_ids:
         dock_type_str = r.hget(f"dock_meta:{dock_id}", "dock_type")
         if dock_type_str != "waiting_zone":
@@ -388,7 +419,7 @@ def reserve_dock(r: redis.Redis, dock_id: str, robot_id: str) -> bool:
     dock_type = _get_dock_type_by_id(r, dock_id)
     lock_key = _dock_lock_key(dock_type, dock_id)
 
-    acquired = r.set(lock_key, robot_id, nx=True)
+    acquired = r.set(lock_key, robot_id, nx=True, ex=DOCK_LOCK_TTL_S)
     if not acquired:
         return False
 
@@ -404,42 +435,111 @@ def reserve_dock(r: redis.Redis, dock_id: str, robot_id: str) -> bool:
     return True
 
 
+def _check_owner(owner: str | None, dock_id: str, robot_id: str, missing_msg: str) -> None:
+    if owner is None:
+        raise ValueError(missing_msg)
+    if owner != robot_id:
+        raise ValueError(f"Dock {dock_id} is owned by '{owner}', not '{robot_id}'")
+
+
+def _with_lock_watch(r: redis.Redis, lock_key: str, body):
+    """Run body(pipe, owner, ttl) under WATCH on lock_key, retrying on WatchError.
+
+    body reads nothing itself; it queues writes after calling pipe.multi().
+    This makes "check owner, then write" atomic against the lock expiring or
+    being taken by another robot in between.
+    """
+    with r.pipeline() as pipe:
+        while True:
+            try:
+                pipe.watch(lock_key)
+                owner = pipe.get(lock_key)
+                ttl = pipe.ttl(lock_key)
+                result = body(pipe, owner, ttl)
+                pipe.execute()
+                return result
+            except redis.WatchError:
+                continue
+
+
 # ---------------------------------------------------------
 # Mark dock occupied (robot arrived)
 # ---------------------------------------------------------
 
-def occupy_dock(r: redis.Redis, dock_id: str, robot_id: str) -> None:
+def occupy_dock(r: redis.Redis, dock_id: str, robot_id: str, item_id: str | None = None) -> None:
+    """Mark a reserved dock occupied by its owner.
+
+    For an ordinary dock the lock TTL is refreshed. For a hand-off dock the
+    lock is made persistent and item_id (if given) is recorded on the dock,
+    because the item now sits on the transporter's slot until it is delivered.
+    """
+    if not _check_if_dock_id_exists(r, dock_id):
+        raise ValueError(f"Dock ID {dock_id} does not exist")
+
+    dock_type = _get_dock_type_by_id(r, dock_id)
+    lock_key = _dock_lock_key(dock_type, dock_id)
+    dock_key = _dock_key(dock_type, dock_id)
+
+    def body(pipe, owner, _ttl):
+        _check_owner(owner, dock_id, robot_id,
+                     f"Dock {dock_id} has not been reserved — call reserve first")
+        pipe.multi()
+        if dock_type == DockType.HANDOFF:
+            pipe.persist(lock_key)
+        else:
+            pipe.expire(lock_key, DOCK_LOCK_TTL_S)
+        mapping = {
+            "status": DockStatus.occupied.value,
+            "robot_id": robot_id,
+            "ts": int(time.time()),
+        }
+        if dock_type == DockType.HANDOFF and item_id:
+            mapping["item_id"] = item_id
+        pipe.hset(dock_key, mapping=mapping)
+
+    _with_lock_watch(r, lock_key, body)
+
+
+# ---------------------------------------------------------
+# Renew a reservation (robot still on its way)
+# ---------------------------------------------------------
+
+def renew_dock(r: redis.Redis, dock_id: str, robot_id: str) -> int:
+    """Extend the owner's lock to the full TTL. Returns the new TTL in seconds.
+
+    A persistent lock (occupied hand-off dock) stays persistent and returns -1.
+    Raises ValueError if the lock is gone or owned by someone else; the robot
+    must then treat its reservation as lost.
+    """
     if not _check_if_dock_id_exists(r, dock_id):
         raise ValueError(f"Dock ID {dock_id} does not exist")
 
     dock_type = _get_dock_type_by_id(r, dock_id)
     lock_key = _dock_lock_key(dock_type, dock_id)
 
-    # Guard: dock must be reserved by this robot before it can be occupied
-    lock_owner = r.get(lock_key)
-    if lock_owner is None:
-        raise ValueError(f"Dock {dock_id} has not been reserved — call reserve first")
-    if lock_owner != robot_id:
-        raise ValueError(
-            f"Dock {dock_id} is reserved by '{lock_owner}', not '{robot_id}'"
-        )
+    def body(pipe, owner, ttl):
+        _check_owner(owner, dock_id, robot_id,
+                     f"Dock {dock_id} has no active reservation to renew")
+        pipe.multi()
+        if ttl == -1:
+            return -1
+        pipe.expire(lock_key, DOCK_LOCK_TTL_S)
+        return DOCK_LOCK_TTL_S
 
-    dock_key = _dock_key(dock_type, dock_id)
-    r.hset(
-        dock_key,
-        mapping={
-            "status": DockStatus.occupied.value,
-            "robot_id": robot_id,
-            "ts": int(time.time()),
-        },
-    )
+    return _with_lock_watch(r, lock_key, body)
 
 
 # ---------------------------------------------------------
 # Release dock
 # ---------------------------------------------------------
 
-def release_dock(r: redis.Redis, dock_id: str, robot_id: str) -> None:
+def release_dock(r: redis.Redis, dock_id: str, robot_id: str, item_id: str | None = None) -> None:
+    """Release a dock. Only its lock owner may release it, with one exception.
+
+    A hand-off dock is locked by the picker that docked there, but it is the
+    transporter that later delivers the item. So a hand-off dock may also be
+    released by any robot that names the item recorded on it.
+    """
     if not _check_if_dock_id_exists(r, dock_id):
         raise ValueError(f"Dock ID {dock_id} does not exist")
 
@@ -447,25 +547,120 @@ def release_dock(r: redis.Redis, dock_id: str, robot_id: str) -> None:
     lock_key = _dock_lock_key(dock_type, dock_id)
     dock_key = _dock_key(dock_type, dock_id)
 
-    # Guard: only the robot that reserved/occupied the dock can release it
-    lock_owner = r.get(lock_key)
-    if lock_owner is None:
-        raise ValueError(f"Dock {dock_id} has no active reservation to release")
-    if lock_owner != robot_id:
-        raise ValueError(
-            f"Dock {dock_id} is owned by '{lock_owner}', not '{robot_id}'"
+    def body(pipe, owner, _ttl):
+        released_by_item = (
+            dock_type == DockType.HANDOFF
+            and item_id
+            and owner is not None
+            and pipe.hget(dock_key, "item_id") == item_id
         )
-
-    r.delete(lock_key)
-    r.hset(
-        dock_key,
-        mapping={
+        if not released_by_item:
+            _check_owner(owner, dock_id, robot_id,
+                         f"Dock {dock_id} has no active reservation to release")
+        pipe.multi()
+        pipe.delete(lock_key)
+        mapping = {
             "status": DockStatus.available.value,
             "robot_id": "",
             "ts": int(time.time()),
-        },
-    )
+        }
+        if dock_type == DockType.HANDOFF:
+            mapping["item_id"] = ""
+        pipe.hset(dock_key, mapping=mapping)
 
+    _with_lock_watch(r, lock_key, body)
+
+
+# ---------------------------------------------------------
+# Expired locks and disconnected robots
+# ---------------------------------------------------------
+
+def reconcile_expired_locks(r: redis.Redis) -> list[str]:
+    """Mark docks available whose lock has expired. Returns the dock ids fixed.
+
+    The lock key is the source of truth for ownership; the dock hash only
+    mirrors it. When a lock expires, Redis deletes it but the hash still says
+    reserved/occupied, so readers call this first to bring the hash in line.
+    """
+    dock_ids = sorted(r.smembers("docks:all"))
+    if not dock_ids:
+        return []
+
+    pipe = r.pipeline(transaction=False)
+    for dock_id in dock_ids:
+        pipe.hget(f"dock_meta:{dock_id}", "dock_type")
+    types = pipe.execute()
+
+    candidates: list[tuple[str, DockType]] = []
+    pipe = r.pipeline(transaction=False)
+    for dock_id, type_str in zip(dock_ids, types):
+        if type_str is None:
+            continue
+        dock_type = DockType(type_str)
+        candidates.append((dock_id, dock_type))
+        pipe.hget(_dock_key(dock_type, dock_id), "status")
+        pipe.exists(_dock_lock_key(dock_type, dock_id))
+    flat = pipe.execute()
+
+    fixed: list[str] = []
+    for i, (dock_id, dock_type) in enumerate(candidates):
+        status, lock_exists = flat[2 * i], flat[2 * i + 1]
+        if lock_exists or status in (None, DockStatus.available.value):
+            continue
+        lock_key = _dock_lock_key(dock_type, dock_id)
+        dock_key = _dock_key(dock_type, dock_id)
+
+        def body(p, owner, _ttl, dock_type=dock_type, dock_key=dock_key):
+            if owner is not None:
+                return False      # re-reserved meanwhile; the hash is current
+            p.multi()
+            mapping = {
+                "status": DockStatus.available.value,
+                "robot_id": "",
+                "ts": int(time.time()),
+            }
+            if dock_type == DockType.HANDOFF:
+                mapping["item_id"] = ""
+            p.hset(dock_key, mapping=mapping)
+            return True
+
+        if _with_lock_watch(r, lock_key, body):
+            fixed.append(dock_id)
+    return fixed
+
+
+def _locks_owned_by(r: redis.Redis, robot_id: str) -> list[str]:
+    keys = _scan_keys(r, ("lock:dock:*",))
+    if not keys:
+        return []
+    owners = r.mget(keys)
+    return [k for k, owner in zip(keys, owners) if owner == robot_id]
+
+
+def shorten_robot_locks(r: redis.Redis, robot_id: str,
+                        grace_s: int = DOCK_LOCK_DISCONNECT_GRACE_S) -> list[str]:
+    """Cut a disconnected robot's expiring locks to grace_s. Returns lock keys changed.
+
+    Persistent locks (an occupied hand-off dock holding an item) are left
+    alone: the item is physically still on that slot.
+    """
+    changed: list[str] = []
+    for key in _locks_owned_by(r, robot_id):
+        ttl = r.ttl(key)
+        if ttl > grace_s:
+            r.expire(key, grace_s)
+            changed.append(key)
+    return changed
+
+
+def restore_robot_locks(r: redis.Redis, robot_id: str) -> list[str]:
+    """Give a (re)connected robot's expiring locks the full TTL again."""
+    changed: list[str] = []
+    for key in _locks_owned_by(r, robot_id):
+        if r.ttl(key) > 0:
+            r.expire(key, DOCK_LOCK_TTL_S)
+            changed.append(key)
+    return changed
 
 
 # ---------------------------------------------------------
@@ -476,6 +671,7 @@ def get_dock_state(r: redis.Redis, dock_id: str) -> dict:
     if not _check_if_dock_id_exists(r, dock_id):
         raise ValueError(f"Dock ID {dock_id} does not exist")
 
+    reconcile_expired_locks(r)
     dock_type = _get_dock_type_by_id(r, dock_id)
     key = _dock_key(dock_type, dock_id)
     return r.hgetall(key)
@@ -485,6 +681,7 @@ def get_all_dock_states(r: redis.Redis) -> list[dict]:
     active_config = r.get("active_dock_config")
     if not active_config or active_config == "none":
         return []
+    reconcile_expired_locks(r)
 
     cursor = 0
     dock_states: list[dict] = []
@@ -528,6 +725,7 @@ def get_active_docks(
     active_config = r.get("active_dock_config")
     if not active_config or active_config == "none":
         return []
+    reconcile_expired_locks(r)
 
     ACTIVE_STATUSES = {DockStatus.reserved.value, DockStatus.occupied.value}
 
@@ -596,6 +794,7 @@ def build_action_map(r: redis.Redis, agent_states: list[dict]) -> dict:
     MAX_PICKERS = RL_CONSTANTS["MAX_PICKERS"]
     MAX_TRANSPORTERS = RL_CONSTANTS["MAX_TRANSPORTERS"]
 
+    reconcile_expired_locks(r)
     dock_ids = sorted(r.smembers("docks:all"))
 
     # ---- classify docks by type ----

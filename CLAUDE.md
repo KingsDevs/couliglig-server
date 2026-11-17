@@ -55,7 +55,14 @@ Activating a dock config copies it from SQLite into Redis. All runtime operation
 add-item → reserve (atomic Redis SET NX lock) → occupy → release
 ```
 
-Docks have types: `pickup`, `receiver`, `waiting_zone`. Items are added to pickup docks and carry a `receiver_dock_id` for delivery routing.
+Docks have types: `pickup`, `receiver`, `waiting_zone`, `hand_off`. Items are added to pickup docks and carry a `receiver_dock_id` for delivery routing.
+
+Lock lifetimes (the `lock:dock:*` key is the source of truth; the `dock:*` hash mirrors it):
+- `reserve` sets a TTL (`DOCK_LOCK_TTL_S`, default 300 s). The owner extends it with `POST /dock/renew` (409 = reservation lost); `occupy` also refreshes it.
+- Readers call `reconcile_expired_locks()` first, which marks docks whose lock has expired as available again.
+- An occupied `hand_off` dock's lock is persistent (the item sits on the transporter's slot). `occupy` records `item_id` on it, and the delivering transporter releases it with `release` + that `item_id`, even though the picker owns the lock.
+- When a robot's `/robots/ws` socket drops, its expiring locks are cut to `DOCK_LOCK_DISCONNECT_GRACE_S` (default 30 s); reconnecting restores the full TTL. Robot ids for locks are `couliglig_bot_{ros_domain_id}`.
+- `robot_ips` is updated with WATCH/MULTI, and each socket only removes the entry carrying its own `session`.
 
 ### RL observation endpoint
 
