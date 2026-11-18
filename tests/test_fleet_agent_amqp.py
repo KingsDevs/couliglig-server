@@ -25,6 +25,7 @@ from coordinator.service import OpsClient  # noqa: E402
 
 from tests.test_coordinator_amqp import Harness, _all_delivered, _wait_for_broker, broker  # noqa: E402,F401
 from tests.test_fleet_agent_contract import MAIN  # noqa: E402,F401  (skips without couliglig-main)
+from tests.test_dock_locks import client, db_session, fake_redis  # noqa: E402,F401
 
 agent_mod = importlib.import_module("couliglig_task_manager.fleet_agent.agent")
 driver_mod = importlib.import_module("couliglig_task_manager.fleet_agent.driver")
@@ -213,6 +214,15 @@ def test_events_wait_on_disk_until_the_coordinator_queue_exists(broker, tmp_path
             assert bus.connected
             await asyncio.sleep(1.0)
             assert len(agent.outbox()) == 1                     # unroutable: still on disk
+            # with nothing to send, heartbeats flow to a broker without a coordinator:
+            # they are dropped, and must not cost the link
+            kept = agent.outbox()
+            agent.confirm(kept[0].msg_id)
+            for _ in range(30):
+                driver.tick()
+                await asyncio.sleep(0.1)
+            assert bus.connected and bus.connects == 1
+            agent._outbox = kept                                 # put the event back
             connection = await aio_pika.connect(url)
             channel = await connection.channel()
             _, queues = await server_topology.declare_coordinator(channel)
@@ -235,5 +245,62 @@ def test_events_wait_on_disk_until_the_coordinator_queue_exists(broker, tmp_path
             assert got[0] == "robot.event" and "robot.hello" in got
         finally:
             await asyncio.get_running_loop().run_in_executor(None, bus.stop)
+
+    asyncio.run(scenario())
+
+
+def test_http_routes_drive_the_fleet(broker, tmp_path, monkeypatch, client, db_session):  # noqa: F811
+    """FLEET_MODE=bus end to end: an operator activates docks and adds items over HTTP,
+    the coordinator plans, and fleet_agent robots deliver."""
+    from definitions import DockType
+    from schema.docks import Dock, DockConfig
+
+    monkeypatch.setenv("FLEET_MODE", "bus")
+    monkeypatch.setenv("AMQP_URL", broker["url"])
+    h = AgentHarness(broker["url"], tmp_path / "coordinator.db", tmp_path)
+    cfg = DockConfig(name="bus e2e", description="")
+    db_session.add(cfg)
+    db_session.commit()
+    db_session.refresh(cfg)
+    for d in h.docks:
+        db_session.add(Dock(config_id=cfg.id, dock_id=d["id"], dock_type=DockType(d["type"]),
+                            x=d["x"], y=d["y"], theta=0.0))
+    db_session.commit()
+
+    async def http(method, url, **kw):
+        return await asyncio.get_running_loop().run_in_executor(None, lambda: getattr(client, method)(url, **kw))
+
+    async def scenario():
+        h.start_coordinator()
+        await h.coordinator_ready()
+        h.start_robots()
+        r = await http("post", f"/dock/activate?config_id={cfg.id}")
+        assert r.status_code == 200 and r.json()["docks"] == len(h.docks), r.text
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            robots = (await http("get", "/fleet/snapshot")).json()["robots"]
+            if sum(x["status"] == "ONLINE" for x in robots.values()) == 4:
+                break
+            await asyncio.sleep(0.5)
+        for k in range(3):
+            r = await http("post", "/dock/add-item", json={"dock_id": f"P{k}", "item_id": f"box{k}",
+                                                           "receiver_dock_id": f"R{k % 2}"})
+            assert r.status_code == 200, r.text
+        r = await http("post", "/dock/add-item", json={"dock_id": "P0", "item_id": "dup",
+                                                       "receiver_dock_id": "R0"})
+        assert r.status_code == 400                     # P0 already holds box0 (the coordinator said so)
+        assert (await http("post", "/dock/reserve", json={"dock_id": "P0", "robot_id": "x"})).status_code == 409
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            items = (await http("get", "/fleet/snapshot")).json()["items"]
+            if len(items) == 3 and all(i["status"] == "DELIVERED" for i in items.values()):
+                break
+            await asyncio.sleep(0.5)
+        else:
+            raise AssertionError(f"not delivered: {items}")
+        deliveries = h.deliveries()
+        await h.stop_robots()
+        await h.stop_coordinator()
+        assert set(deliveries) == {"box0", "box1", "box2"} and set(deliveries.values()) == {1}
 
     asyncio.run(scenario())

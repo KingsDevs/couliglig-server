@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -9,12 +11,32 @@ from schema import DockConfig, Dock, MapConfig, RobotInfo
 from models.dock_schema import DockConfigCreate, DockConfigUpdate, DockConfigOut, DockOut, DockUpdate, DockCreate, DockBulkUpdate, DockBulkDelete
 from models.dock_actions import AddItemRequest, RemoveItemRequest, ReserveDockRequest, OccupyDockRequest, ReleaseDockRequest, RenewDockRequest
 from definitions import DockType
+from services import fleet_ops
 from services.redis_dock_runtime import redis_client_from_env, get_active_dock_config_id, clear_all_dock_keys, activate_docks, add_item_to_pickup_dock, remove_item_from_pickup_dock, release_dock, reserve_dock, occupy_dock, renew_dock, get_dock_state, get_all_dock_states, get_active_docks
 
 router = APIRouter(prefix="/dock", tags=["dock"])
 
 redis_client = redis_client_from_env()
 MAP_STORAGE = Path("db/maps")
+
+
+def _legacy_only():
+    """Robot dock locks belong to the legacy stack; under FLEET_MODE=bus the coordinator owns docks."""
+    if fleet_ops.bus_mode():
+        raise HTTPException(status_code=409, detail="FLEET_MODE=bus: the fleet coordinator owns the docks")
+
+
+@contextmanager
+def _fleet_errors():
+    """Coordinator replies as HTTP errors: refused -> 400, unreachable -> 503."""
+    try:
+        yield
+    except fleet_ops.FleetRefused as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except fleet_ops.FleetUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("", response_model=DockConfigOut)
 def create_config(payload: DockConfigCreate, db: Session = Depends(get_db_session)):
@@ -233,12 +255,23 @@ def activate_config(config_id: int, db: Session = Depends(get_db_session)):
     if not cfg:
         raise HTTPException(status_code=404, detail="Config not found")
 
+    if fleet_ops.bus_mode():
+        with _fleet_errors():
+            reply = fleet_ops.call("activate", docks=fleet_ops.coordinator_docks(db, config_id))
+        return {"success": True, "active_config_id": cfg.id, "fleet_mode": "bus", "docks": reply["docks"]}
+
     activate_docks(redis_client, db, config_id)
 
     return {"success": True, "active_config_id": cfg.id}
 
 @router.post("/add-item")
 def add_item(request: AddItemRequest):
+    if fleet_ops.bus_mode():
+        with _fleet_errors():
+            fleet_ops.call("add_item", item_id=request.item_id, pickup_dock=request.dock_id,
+                           receiver_dock=request.receiver_dock_id,
+                           weight=request.item_weight if request.item_weight is not None else 1.0)
+        return {"status": "ok"}
 
     try:
         
@@ -267,6 +300,16 @@ def add_item(request: AddItemRequest):
 
 @router.post("/remove-item")
 def remove_item(request: RemoveItemRequest):
+    if fleet_ops.bus_mode():
+        with _fleet_errors():
+            items = fleet_ops.call("snapshot")["items"]
+            waiting = [i for i, it in items.items()
+                       if it["pickup_dock"] == request.dock_id and it["status"] == "AVAILABLE"]
+            if not waiting:
+                raise fleet_ops.FleetRefused(f"no waiting item at dock {request.dock_id}")
+            fleet_ops.call("remove_item", item_id=waiting[0])
+        return {"status": "ok"}
+
     try:
         success = remove_item_from_pickup_dock(
             redis_client,
@@ -289,6 +332,7 @@ def remove_item(request: RemoveItemRequest):
 
 @router.post("/reserve")
 def reserve(request: ReserveDockRequest):
+    _legacy_only()
     try:
         success = reserve_dock(
             redis_client,
@@ -312,6 +356,7 @@ def reserve(request: ReserveDockRequest):
 
 @router.post("/occupy")
 def occupy(request: OccupyDockRequest):
+    _legacy_only()
     try:
         occupy_dock(
             redis_client,
@@ -330,6 +375,7 @@ def occupy(request: OccupyDockRequest):
 
 @router.post("/release")
 def release(request: ReleaseDockRequest):
+    _legacy_only()
     try:
         release_dock(
             redis_client,
@@ -353,6 +399,7 @@ def renew(request: RenewDockRequest):
     409 means the reservation was lost (expired or taken): the robot must stop
     using this dock and re-plan.
     """
+    _legacy_only()
     try:
         ttl = renew_dock(redis_client, request.dock_id, request.robot_id)
     except ValueError as e:

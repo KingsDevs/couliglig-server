@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes import register_router, docks_router, maps_router, actions_router, rl_router, mapping_router
+from routes import register_router, docks_router, maps_router, actions_router, rl_router, mapping_router, fleet_router
 from fastapi.responses import HTMLResponse
 from services import get_db_session
 from services.register_host import get_hosts_file
@@ -27,6 +27,7 @@ app.include_router(maps_router)
 app.include_router(actions_router)
 app.include_router(rl_router)
 app.include_router(mapping_router)
+app.include_router(fleet_router)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 def read_hosts_lines() -> list[str]:
