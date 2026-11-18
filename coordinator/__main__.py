@@ -28,7 +28,13 @@ def build(config: dict) -> tuple[Coordinator, str]:
     timing = Config(**config.get("timing", {}))
     store = Store(config.get("db", "db/coordinator.db"))
     url = os.getenv("AMQP_URL", config.get("amqp_url", "amqp://guest:guest@localhost:5672/"))
-    return Coordinator(store, policy, spec, grid, config=timing), url
+    # Manual unless the config says otherwise: robots get no tasks until an operator
+    # switches to auto (POST /fleet/resume). Only a fresh db/coordinator.db uses this;
+    # afterwards the last manual / auto setting is kept.
+    control = str(config.get("control", "manual")).strip().lower()
+    if control not in ("manual", "auto"):
+        raise SystemExit(f"control must be 'manual' or 'auto', not {control!r}")
+    return Coordinator(store, policy, spec, grid, config=timing, manual=control == "manual"), url
 
 
 def main():

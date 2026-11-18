@@ -189,7 +189,7 @@ class CoordinatorFeasibility:
 class Coordinator:
     def __init__(self, store: Store, policy: DecisionPolicy, spec: PolicySpec, grid: Grid,
                  distance: Callable | None = None, config: Config | None = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, manual: bool = False):
         self.store, self.policy, self.spec, self.grid = store, policy, spec, grid
         self.distance = distance or GridDistance(grid)
         self.config = config or Config()
@@ -197,7 +197,10 @@ class Coordinator:
         self.session = uuid.uuid4().hex
         self.epoch = 0
         self.seq = 0
-        self.paused = False
+        # Manual (paused): no new tasks; running ones finish. `manual` is the mode of a
+        # fresh store; after that the last pause / resume / estop is kept across restarts.
+        self.default_manual = manual
+        self.paused = manual
         self.docks: dict[str, Dock] = {}
         self.robots: dict[str, RobotRec] = {}
         self.items: dict[str, ItemRec] = {}
@@ -217,6 +220,7 @@ class Coordinator:
     def start(self) -> int:
         """Load persisted state and start a new epoch (fences off older commands)."""
         self.epoch = self.store.next_epoch()
+        self.paused = bool(self.store.get_meta("paused", self.default_manual))
         for d in self.store.get_meta("docks", []):
             self._add_dock(d)
         for row in self.store.load_items():
@@ -231,8 +235,9 @@ class Coordinator:
                 self.robots[t.robot_id].task_id = t.id
             if t.slot:
                 self.slots[t.slot] = t.robot_id
-        log.info("coordinator epoch %d: %d docks, %d items, %d robots, %d active tasks",
-                 self.epoch, len(self.docks), len(self.items), len(self.robots), len(self.tasks))
+        log.info("coordinator epoch %d: %d docks, %d items, %d robots, %d active tasks; %s",
+                 self.epoch, len(self.docks), len(self.items), len(self.robots), len(self.tasks),
+                 "MANUAL (no new tasks until resume)" if self.paused else "AUTO")
         self._trigger_round()
         return self.epoch
 
@@ -514,28 +519,38 @@ class Coordinator:
         self.store.commit(deleted_items=[item.id])
         return {"ok": True}, []
 
+    def _set_paused(self, paused: bool):
+        self.paused = paused
+        self.store.commit(meta={"paused": paused})
+
     def _op_pause(self, op):
-        self.paused = True
+        self._set_paused(True)
         return {"ok": True}, [self._heartbeat_out()]
 
     def _op_resume(self, op):
-        self.paused = False
+        self._set_paused(False)
         self._trigger_round()
         return {"ok": True}, [self._broadcast("coordinator.resume", m.Resume(issued_by=op.get("issued_by", ""))),
                               self._heartbeat_out()]
 
     def _op_estop(self, op):
-        self.paused = True
+        self._set_paused(True)
         return {"ok": True}, [self._broadcast("coordinator.estop",
                                               m.EStop(reason=op.get("reason", ""), issued_by=op.get("issued_by", "")))]
 
     def _op_snapshot(self, op):
-        return {"ok": True, "epoch": self.epoch, "paused": self.paused, "metrics": dict(self.metrics),
-                "robots": {r.id: {"role": r.role, "status": r.status, "exec_state": r.exec_state,
-                                  "task": r.task_id, "zone": r.zone, "carried": list(r.carried),
-                                  "held_item": r.held_item} for r in self.robots.values()},
-                "items": {i.id: {"status": i.status, "holder": i.holder, "transporter": i.transporter}
+        return {"ok": True, "epoch": self.epoch, "paused": self.paused,
+                "control": "manual" if self.paused else "auto", "metrics": dict(self.metrics),
+                "robots": {r.id: {"role": r.role, "robot_type": r.robot_type, "status": r.status,
+                                  "exec_state": r.exec_state, "task": r.task_id, "zone": r.zone,
+                                  "parked": r.parked, "carried": list(r.carried), "held_item": r.held_item,
+                                  "pose": None if r.pose is None else
+                                  {"x": r.pose.x, "y": r.pose.y, "yaw": r.pose.yaw, "loc_ok": r.pose.loc_ok}}
+                           for r in self.robots.values()},
+                "items": {i.id: {"status": i.status, "pickup_dock": i.pickup_dock, "receiver_dock": i.receiver_dock,
+                                 "weight": i.weight, "holder": i.holder, "transporter": i.transporter}
                           for i in self.items.values()},
+                "docks": {d.id: {"type": d.type, "x": d.x, "y": d.y, "yaw": d.yaw} for d in self.docks.values()},
                 "tasks": {t.id: {"robot": t.robot_id, "kind": t.kind, "status": t.status, "target": t.target}
                           for t in self.tasks.values() if t.status in ACTIVE}}, []
 
@@ -720,10 +735,10 @@ class Coordinator:
     def _commit_handoff(self, rid, t: RobotRec, item: ItemRec, slot: str, now) -> Out:
         item.status, item.transporter = HANDING, t.id
         self.slots[slot] = rid
+        # The slot dock rides on the transporter, so a pose stored with it is meaningless:
+        # the leg points at the transporter (the commander finds the slot by TF).
         pose = t.pose or m.Pose(x=0.0, y=0.0)
-        slot_dock = self.docks.get(slot)
-        leg_pose = m.Pose(x=slot_dock.x, y=slot_dock.y, yaw=slot_dock.yaw) if slot_dock else \
-            m.Pose(x=pose.x, y=pose.y, yaw=pose.yaw)
+        leg_pose = m.Pose(x=pose.x, y=pose.y, yaw=pose.yaw)
         legs = [{"dock_id": slot, "pose": leg_pose.model_dump(), "lift": m.Lift.DOWN.value}]
         task = self._new_task(rid, m.TaskKind.HANDOFF_PLACE, item.id, t.id, legs, self._dest_cell(t.id), now,
                               slot=slot)

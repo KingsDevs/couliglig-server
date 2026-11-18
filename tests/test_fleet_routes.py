@@ -126,6 +126,75 @@ class TestBus:
         assert calls[1][1] == {"reason": "door open"}
 
 
+@pytest.fixture()
+def real_coordinator(monkeypatch):
+    """FLEET_MODE=bus with an in-process Coordinator behind fleet_ops.call, so the routes
+    see the coordinator's real replies (no broker, no robots)."""
+    from coordinator.core import Coordinator
+    from coordinator.grid import Grid
+    from coordinator.policies import StayPolicy
+    from coordinator.store import Store
+    from tests.test_coordinator_core import SPEC
+
+    monkeypatch.setenv("FLEET_MODE", "bus")
+    coord = Coordinator(Store(), StayPolicy(SPEC), SPEC, Grid.open(12, 12), manual=True)
+    coord.start()
+
+    def call(op, timeout_s=5.0, **args):
+        reply, _ = coord.handle_op({"op": op, **args})
+        if not reply.get("ok"):
+            raise fleet_ops.FleetRefused(reply.get("error") or f"{op} refused")
+        return reply
+
+    monkeypatch.setattr(fleet_ops, "call", call)
+    return coord
+
+
+class TestBusAgainstTheCoordinator:
+
+    def test_items_through_the_dock_routes(self, client, config_id, real_coordinator):  # noqa: F811
+        assert client.post(f"/dock/activate?config_id={config_id}").status_code == 200
+        r = client.post("/dock/add-item", json={"dock_id": "P0", "item_id": "box1",
+                                                "receiver_dock_id": "R0", "item_weight": 2.0})
+        assert r.status_code == 200
+        states = {d["dock_id"]: d for d in client.get("/dock/all_dock_states").json()}
+        assert set(states) == {"P0", "R0", HANDOFF}
+        assert (states["P0"]["dock_type"], states["P0"]["status"], states["P0"]["item_id"],
+                states["P0"]["item_weight"], states["P0"]["receiver_dock_id"]) == \
+            ("pickup", "available", "box1", 2.0, "R0")
+        assert states["R0"]["item_id"] is None
+        assert client.post("/dock/remove-item", json={"dock_id": "P0"}).status_code == 200
+        assert "box1" not in real_coordinator.items
+
+    def test_manual_by_default_and_auto_on_resume(self, client, real_coordinator):  # noqa: F811
+        snap = client.get("/fleet/snapshot").json()
+        assert (snap["control"], snap["paused"]) == ("manual", True)
+        assert client.post("/fleet/resume").status_code == 200
+        assert client.get("/fleet/snapshot").json()["control"] == "auto"
+        assert client.post("/fleet/pause").status_code == 200
+        assert client.get("/fleet/snapshot").json()["control"] == "manual"
+
+
+def test_dock_states_from_a_snapshot():
+    snapshot = {
+        "docks": {"P0": {"type": "pickup", "x": 1.0, "y": 2.0, "yaw": 0.0},
+                  "R0": {"type": "receiver", "x": 3.0, "y": 4.0, "yaw": 0.0},
+                  "Z0": {"type": "waiting_zone", "x": 5.0, "y": 6.0, "yaw": 0.0},
+                  "Z1": {"type": "waiting_zone", "x": 7.0, "y": 8.0, "yaw": 0.0}},
+        "items": {"a": {"status": "CLAIMED", "pickup_dock": "P0", "receiver_dock": "R0", "weight": 1.0,
+                        "holder": "couliglig_bot_1", "transporter": None},
+                  "b": {"status": "DELIVERING", "pickup_dock": "P9", "receiver_dock": "R0", "weight": 1.0,
+                        "holder": None, "transporter": "couliglig_bot_3"}},
+        "robots": {"couliglig_bot_3": {"zone": "Z0", "parked": True},
+                   "couliglig_bot_4": {"zone": "Z1", "parked": False}},
+    }
+    rows = {r["dock_id"]: r for r in fleet_ops.dock_states(snapshot)}
+    assert (rows["P0"]["status"], rows["P0"]["robot_id"], rows["P0"]["item_id"]) == ("reserved", "couliglig_bot_1", "a")
+    assert (rows["R0"]["status"], rows["R0"]["robot_id"]) == ("reserved", "couliglig_bot_3")
+    assert (rows["Z0"]["status"], rows["Z0"]["robot_id"]) == ("occupied", "couliglig_bot_3")
+    assert (rows["Z1"]["status"], rows["Z1"]["robot_id"]) == ("reserved", "couliglig_bot_4")
+
+
 def test_bad_fleet_mode_is_an_error(monkeypatch):
     monkeypatch.setenv("FLEET_MODE", "both")
     with pytest.raises(RuntimeError, match="FLEET_MODE"):

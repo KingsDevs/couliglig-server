@@ -429,6 +429,9 @@ def dock_state(dock_id: str):
 
 @router.get("/all_dock_states")
 def all_dock_states():
+    if fleet_ops.bus_mode():
+        with _fleet_errors():
+            return fleet_ops.dock_states(fleet_ops.call("snapshot"))
     states = get_all_dock_states(redis_client)
 
     return states

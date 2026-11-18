@@ -1,0 +1,24 @@
+# Fleet coordinator for the Webots fleet sim (scripts/sim_up.sh; python -m coordinator --config coordinator.sim.yaml)
+amqp_url: amqp://sim:sim@localhost:5673/      # the sim's own broker (Docker); AMQP_URL overrides
+db: db/coordinator_sim.db                     # kept apart from db/coordinator.db
+
+control: manual    # manual | auto on a fresh db; after that the last setting is kept
+                   # (manual: no new tasks; POST /fleet/resume = auto, /fleet/pause = manual)
+
+grid:
+  cell_size_m: 0.75
+  map_yaml: db/maps/webots-fleet-2_warehouse_sim_2.yaml   # written by scripts/seed_webots_sim.py
+
+policy:
+  primary: stay
+  fallback: stay
+  decide_timeout_ms: 200
+  marl_onnx:
+    model_dir: policy_models/imit_pointer_obs_tc-round_2
+    deterministic: true
+
+timing:
+  stale_s: 3.0
+  offline_s: 30.0
+  command_ttl_s: 10.0
+  robot_speed_mps: 0.26

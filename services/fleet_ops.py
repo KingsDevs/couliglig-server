@@ -73,6 +73,39 @@ def call(op: str, timeout_s: float = 5.0, **args) -> dict:
     return reply
 
 
+def dock_states(snapshot: dict) -> list[dict]:
+    """The coordinator's snapshot as GET /dock/all_dock_states rows (the Redis format), so
+    the web UI's dock tables work unchanged in bus mode.
+
+    status: available, reserved (a robot is on its way: the picker for a claimed item,
+    the transporter delivering to a receiver, a transporter heading to a zone) or
+    occupied (a transporter parked in the zone). A pickup shows the item waiting at it.
+    """
+    items, robots = snapshot.get("items", {}), snapshot.get("robots", {})
+    rows = []
+    for dock_id, d in snapshot.get("docks", {}).items():
+        status, robot_id, item_id, item = "available", None, None, None
+        if d["type"] == DockType.PICKUP.value:
+            for iid, it in items.items():
+                if it["pickup_dock"] == dock_id and it["status"] in ("AVAILABLE", "CLAIMED"):
+                    item_id, item = iid, it
+                    if it["status"] == "CLAIMED":
+                        status, robot_id = "reserved", it.get("holder")
+        elif d["type"] == DockType.RECEIVER.value:
+            for iid, it in items.items():
+                if it["receiver_dock"] == dock_id and it["status"] == "DELIVERING":
+                    status, robot_id = "reserved", it.get("transporter")
+        elif d["type"] == DockType.WAITING_ZONE.value:
+            for rid, r in robots.items():
+                if r.get("zone") == dock_id:
+                    status, robot_id = ("occupied" if r.get("parked") else "reserved"), rid
+        rows.append({"dock_type": d["type"], "dock_id": dock_id, "x": d["x"], "y": d["y"], "yaw": d["yaw"],
+                     "status": status, "robot_id": robot_id, "item_id": item_id,
+                     "item_weight": item["weight"] if item else None,
+                     "receiver_dock_id": item["receiver_dock"] if item else None, "ts": None})
+    return rows
+
+
 def coordinator_docks(db: Session, config_id: int) -> list[dict]:
     """A dock config from SQLite, as the coordinator's activate op takes it.
 

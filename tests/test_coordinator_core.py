@@ -377,6 +377,47 @@ class TestRegistration:
         assert not f.op({"op": "add_item", "item_id": "x", "pickup_dock": "P1", "receiver_dock": "R0"})["ok"]
         assert not f.op({"op": "nonsense"})["ok"]
 
+    def test_manual_fleet_gets_no_tasks_until_auto(self, tmp_path):
+        store = Store(tmp_path / "coordinator.db")
+        store.set_meta("paused", True)               # as a manual coordinator left it
+        f = fleet(items=2, store=store)
+        f.run(20.0)
+        assert f.coord.metrics["commands"] == 0
+        assert f.op({"op": "snapshot"})["control"] == "manual"
+        f.op({"op": "resume"})
+        assert f.op({"op": "snapshot"})["control"] == "auto"
+        assert f.run(900, until=f.all_delivered)
+
+    def test_manual_or_auto_is_kept_across_restarts(self, tmp_path):
+        grid, _ = layout()
+
+        def start(**kw):
+            c = Coordinator(Store(tmp_path / "coordinator.db"), StayPolicy(SPEC), SPEC, grid, **kw)
+            c.start()
+            return c
+
+        c = start(manual=True)                       # a fresh store takes the default
+        assert c.paused
+        c.handle_op({"op": "resume"})
+        c.store.close()
+        c = start(manual=True)                       # then the last setting wins
+        assert not c.paused
+        c.handle_op({"op": "estop", "reason": "test"})
+        c.store.close()
+        assert start().paused                        # e-stop leaves it manual
+
+    def test_switching_to_manual_lets_running_tasks_finish(self):
+        f = fleet(items=4)
+        assert f.run(60.0, until=lambda: any(t.status in ACTIVE for t in f.coord.tasks.values()))
+        running = [t.id for t in f.coord.tasks.values() if t.status in ACTIVE]
+        f.op({"op": "pause"})
+        commands = f.coord.metrics["commands"]
+        assert f.run(500.0, until=lambda: not any(t.status in ACTIVE for t in f.coord.tasks.values()))
+        f.run(30.0)
+        final = {t["id"]: t["status"] for t in f.coord.store.load_tasks()}
+        assert all(final[t] == "SUCCEEDED" for t in running)
+        assert f.coord.metrics["commands"] == commands      # nothing new was sent
+
     def test_state_survives_restart_from_disk(self, tmp_path):
         store = Store(tmp_path / "coordinator.db")
         f = fleet(items=3, store=store)
