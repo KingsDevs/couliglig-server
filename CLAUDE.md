@@ -68,15 +68,22 @@ Lock lifetimes (the `lock:dock:*` key is the source of truth; the `dock:*` hash 
 
 `GET /rl/builder-inputs?robot_id={id}` (in `routes/rl.py`) returns the full environment state for RL training — dock states, item weights, robot poses (fetched live from each robot's `/roslib/transform`), picker/transporter agent states, and a deterministic `action_map` with padded indices (MAX_ITEMS=20, MAX_WZ=8, MAX_PICKERS=10, MAX_TRANSPORTERS=5).
 
-### Fleet coordinator (in progress, replaces the endpoint above)
+### Fleet coordinator (Phase 2; not yet driving robots)
 
-`coordinator/` is the new central decision layer (design: the "Couliglig MARL Deployment Redesign" doc). It is a Python port of couliglig-gamesim's policy layer:
+`coordinator/` is the single writer of fleet state that replaces the per-robot RL loop (design: the "Couliglig MARL Deployment Redesign" doc). It runs beside the legacy Redis path; FastAPI routes are not wired to it yet (that is the Phase 3 cut-over).
 
-- `coordinator/spec/` — `World` snapshot in grid cells (port of gamesim `PolicyWorld`), `observe()` (port of `RLObserver`, mirrors marl-couliglig `PickerTransporterEnv1` observations), `policy.json` loader. Masks are the env's rules narrowed by a `Feasibility` object (`EnvRules` = env rules only).
-- `coordinator/policies/` — `MarlOnnxPolicy` (onnxruntime, in-process), `GreedyPolicy`, `StayPolicy`, `FallbackPolicy` (per-robot substitution on timeout, error or illegal index), `decode()` from action index to verb + target.
-- `policy_models/<name>/` — an exported model directory from gamesim's `tools/export_policy.py` (`--out` can write here directly): `picker.onnx`, `transporter.onnx`, `policy.json`, `fixtures.json`. Loading a directory re-runs every fixture through the observer and the ONNX models and refuses it on any mismatch. (`models/` is the pydantic package, hence the different name.)
+- `coordinator/protocol/` — envelope (`couliglig.fleet/1`, session, seq, epoch), pydantic message payloads, `PROTOCOL_HASH`, RabbitMQ topology. couliglig-main's fleet_agent will keep a copy; `robot.hello` carries the hash. A welcome names the hello it answers (`hello_id`); robots ignore any other.
+- `coordinator/core.py` — the synchronous state machine: registry and liveness, world model, decision rounds with the env's conflict rules, task state machine, reconciliation. Commitments are applied at decision time; failures roll back using the robot's physical report. Only a new session (robot restart) can lose a task; a same-session hello never fails one.
+- `coordinator/store.py` — the coordinator's own SQLite file (`db/coordinator.db`): epoch, items, tasks, robots, event log (dedup by `event_id`). Write-through before acking an event.
+- `coordinator/service.py` — aio-pika wiring (`CoordinatorService`) and `OpsClient` (operator RPC over `fleet.ops`). Publishing failures during a broker outage are logged, never fatal.
+- `coordinator/grid.py` — metres <-> 0.75 m training cells; `GridDistance` (BFS) until the Nav2 provider exists. Unknown map pixels (205) are blocked.
+- `coordinator/spec/`, `coordinator/policies/` — the decision layer ported from couliglig-gamesim (`World`, `observe()`, `MarlOnnxPolicy`, `GreedyPolicy`, `StayPolicy`, `FallbackPolicy`, `decode()`). Prefer `stay` over `greedy`: greedy transporters hop between free zones, as in the env.
+- `coordinator/sim/` — `FakeRobot` (the fleet_agent contract), `SimFleet` (in-process, simulated clock, message loss/duplication/delay, restarts, partitions), `AmqpRobot` (the same robot over RabbitMQ).
+- `policy_models/<name>/` — an exported model directory from gamesim's `tools/export_policy.py`: `picker.onnx`, `transporter.onnx`, `policy.json`, `fixtures.json`. Loading re-runs every fixture and refuses the directory on any mismatch. (`models/` is the pydantic package, hence the name.)
 
-Tests: `pytest tests/test_coordinator_policy.py -v` (observer, heuristics and ONNX against the fixtures).
+Run: `python -m coordinator --config coordinator.yaml` (or the `coordinator` service in docker-compose, with `rabbitmq`).
+
+Tests: `tests/test_coordinator_policy.py` (fixtures), `tests/test_coordinator_protocol.py`, `tests/test_coordinator_core.py` (in-process scenarios incl. chaos and restarts), `tests/test_coordinator_amqp.py` (real RabbitMQ in a throwaway Docker container; skipped without Docker).
 
 ### Test isolation
 

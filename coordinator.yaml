@@ -1,0 +1,23 @@
+# Fleet coordinator (python -m coordinator --config coordinator.yaml)
+amqp_url: amqp://guest:guest@localhost:5672/   # AMQP_URL overrides
+db: db/coordinator.db                          # its own SQLite file (epoch, items, tasks, events)
+
+grid:
+  cell_size_m: 0.75            # one training-grid cell (see the plan's grid-scale answer)
+  map_yaml: db/maps/map.yaml   # the map the robots navigate; without it: an open width x height grid
+  # width: 40
+  # height: 40
+
+policy:
+  primary: stay                # marl_onnx once the round 2 model is confirmed. Not greedy:
+  fallback: stay               # greedy transporters hop between free zones (as in the env)
+  decide_timeout_ms: 200
+  marl_onnx:
+    model_dir: policy_models/imit_pointer_obs_tc-round_2
+    deterministic: true
+
+timing:                        # coordinator.core.Config; defaults shown
+  stale_s: 3.0
+  offline_s: 30.0
+  command_ttl_s: 10.0
+  robot_speed_mps: 0.26

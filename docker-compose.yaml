@@ -30,6 +30,46 @@ services:
     networks:
       - couliglig_network
 
+  # Fleet coordinator (Phase 2 of the MARL deployment redesign). The legacy
+  # Redis path above keeps running until Phase 5.
+  rabbitmq:
+    image: rabbitmq:3.13.7-management
+    container_name: rabbitmq
+    restart: always
+    hostname: rabbitmq            # keeps the node name, so durable queues survive recreation
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-couliglig}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS:-change-me}
+    ports:
+      - "5672:5672"               # robots connect over the LAN
+      - "15672:15672"             # management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+    networks:
+      - couliglig_network
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coordinator
+    restart: always
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - AMQP_URL=amqp://${RABBITMQ_USER:-couliglig}:${RABBITMQ_PASS:-change-me}@rabbitmq:5672/
+    volumes:
+      - ./db:/app/db              # db/coordinator.db and the maps
+    command: ["python", "-m", "coordinator", "--config", "coordinator.yaml"]
+    networks:
+      - couliglig_network
+
   # robot-watcher:
   #   build:
   #     context: .
@@ -56,3 +96,6 @@ services:
 networks:
   couliglig_network:
     driver: bridge
+
+volumes:
+  rabbitmq-data:
