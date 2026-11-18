@@ -46,6 +46,16 @@ class Chaos:
     seed: int = 0
 
 
+def _fake_robot(fleet: "SimFleet", robot_id: str, role: str, cell, previous=None, **kw) -> FakeRobot:
+    if previous is not None:
+        robot = FakeRobot(robot_id, previous.role, previous.cell, fleet.grid, fleet.clock, distance=fleet.distance,
+                          speed_cells_s=previous.speed, capacity=previous.capacity)
+        robot.lift = previous.lift
+        return robot
+    return FakeRobot(robot_id, role, cell, fleet.grid, fleet.clock, distance=fleet.distance,
+                     speed_cells_s=kw.pop("speed_cells_s", fleet.speed), **kw)
+
+
 @dataclass(order=True)
 class _Msg:
     due: float
@@ -57,7 +67,7 @@ class _Msg:
 class SimFleet:
     def __init__(self, spec: PolicySpec, grid: Grid, docks: list[dict], policy=None, config: Config | None = None,
                  store: Store | None = None, chaos: Chaos | None = None, speed_cells_s: float = 2.0,
-                 dt: float = 0.1):
+                 dt: float = 0.1, robot_factory=None):
         self.spec, self.grid, self.dt = spec, grid, dt
         self.clock = SimClock()
         self.distance = GridDistance(grid)
@@ -67,6 +77,9 @@ class SimFleet:
         self.chaos = chaos or Chaos()
         self.rng = random.Random(self.chaos.seed)
         self.speed = speed_cells_s
+        # robot_factory(fleet, robot_id, role, cell, previous=None, **kw) -> a robot; previous is the
+        # robot being rebooted (its physical state survives). Default: FakeRobot.
+        self.robot_factory = robot_factory or _fake_robot
         self.robots: dict[str, FakeRobot] = {}
         self.down: set[str] = set()          # robots that are off (no messages either way)
         self.partitioned: set[str] = set()   # robots cut off from the network (keep running)
@@ -86,11 +99,14 @@ class SimFleet:
     # ---------------- fleet management
 
     def add_robot(self, robot_id: str, role: str, cell, **kw) -> FakeRobot:
-        robot = FakeRobot(robot_id, role, cell, self.grid, self.clock, distance=self.distance,
-                          speed_cells_s=kw.pop("speed_cells_s", self.speed), **kw)
+        robot = self.robot_factory(self, robot_id, role, cell, None, **kw)
         self.robots[robot_id] = robot
-        self._send(robot_id, "coordinator", robot.hello(), kind="event")
+        self._boot(robot_id, robot)
         return robot
+
+    def _boot(self, robot_id: str, robot):
+        # a robot with an outbox (fleet_agent) sends what it kept before its hello
+        self._robot_outputs(robot_id, robot.boot() if hasattr(robot, "boot") else [robot.hello()])
 
     def op(self, op: dict) -> dict:
         reply, outs = self.coord.handle_op(op)
@@ -100,12 +116,10 @@ class SimFleet:
     def reboot_robot(self, robot_id: str) -> FakeRobot:
         """Power cycle: a new fleet_agent session; the physical state (cell, lift) survives."""
         old = self.robots[robot_id]
-        robot = FakeRobot(robot_id, old.role, old.cell, self.grid, self.clock, distance=self.distance,
-                          speed_cells_s=old.speed, capacity=old.capacity)
-        robot.lift = old.lift
+        robot = self.robot_factory(self, robot_id, old.role, old.cell, old)
         self.robots[robot_id] = robot
         self.down.discard(robot_id)
-        self._send(robot_id, "coordinator", robot.hello(), kind="event")
+        self._boot(robot_id, robot)
         return robot
 
     def restart_coordinator(self):
