@@ -156,6 +156,10 @@ class TaskRec:
 
 
 def numeric_id(robot_id: str):
+    """Sort key for tie-breaks: the robot's number, so couliglig_bot_2 < couliglig_bot_10.
+
+    (The training env compares ids as text, picker_10 < picker_2: a known env
+    defect; the trajectory tests treat those ties as expected differences.)"""
     match = re.search(r"(\d+)$", robot_id)
     return (int(match.group(1)), robot_id) if match else (math.inf, robot_id)
 
@@ -408,7 +412,9 @@ class Coordinator:
                 r.zone, r.parked = None, False
         elif kind == m.TaskKind.DELIVER:
             item = self.items[t.item_id]
-            item.status = ON_TRANSPORTER
+            item.status = ON_TRANSPORTER     # still on board: load it back
+            if item.id not in r.carried:
+                r.carried.append(item.id)
             items.append(item)
         if final in (FAILED, REJECTED) and t.target and reason not in ("offline", "expired"):
             self._record_failure(r.id, t.target)
@@ -668,9 +674,16 @@ class Coordinator:
             taken.add(item_id)
             outs.append(self._commit_pick(rid, item, now))
 
+        # one hand-off per transporter per round (the env settles each
+        # transporter's claimants to a single winner), by distance to where
+        # the transporter is heading
+        served = set()
         for rid, t_idx in closest_first(by_verb["handoff"],
-                                        lambda e: self._cell(transporters[e[1]])):
+                                        lambda e: self._dest_cell(transporters[e[1]])):
             tid = transporters[t_idx]
+            if tid in served:
+                continue
+            served.add(tid)
             t = self.robots[tid]
             picker = self.robots[rid]
             item = self.items.get(picker.held_item) if picker.held_item else None
@@ -712,7 +725,8 @@ class Coordinator:
         leg_pose = m.Pose(x=slot_dock.x, y=slot_dock.y, yaw=slot_dock.yaw) if slot_dock else \
             m.Pose(x=pose.x, y=pose.y, yaw=pose.yaw)
         legs = [{"dock_id": slot, "pose": leg_pose.model_dump(), "lift": m.Lift.DOWN.value}]
-        task = self._new_task(rid, m.TaskKind.HANDOFF_PLACE, item.id, t.id, legs, self._cell(t.id), now, slot=slot)
+        task = self._new_task(rid, m.TaskKind.HANDOFF_PLACE, item.id, t.id, legs, self._dest_cell(t.id), now,
+                              slot=slot)
         self._save(items=[item], tasks=[task])
         return self._task_out(task)
 
@@ -728,6 +742,8 @@ class Coordinator:
         r = self.robots[rid]
         r.zone, r.parked = None, False      # leaving the zone frees it (env: free_waiting_zone)
         item.status = DELIVERING
+        if item.id in r.carried:            # unloaded at decision time, as in the env
+            r.carried.remove(item.id)
         dock = self.docks[item.receiver_dock]
         task = self._new_task(rid, m.TaskKind.DELIVER, item.id, dock.id, [self._leg(dock, m.Lift.NONE)], dock.cell, now)
         self._save(items=[item], tasks=[task], robots=[r])
@@ -825,6 +841,14 @@ class Coordinator:
         if r.pose is None:
             return (0, 0)
         return self.grid.cell_of(r.pose.x, r.pose.y)
+
+    def _dest_cell(self, rid: str) -> tuple[int, int]:
+        """Where a robot will be once its current task ends (its cell if idle)."""
+        r = self.robots[rid]
+        t = self.tasks.get(r.task_id) if r.task_id else None
+        if t is not None and t.status in ACTIVE:
+            return t.dest_cell
+        return self._cell(rid)
 
     def _room(self, t: RobotRec) -> float:
         on_board = sum(self.items[i].weight for i in t.carried if i in self.items)
