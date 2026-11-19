@@ -192,6 +192,7 @@ class Coordinator:
                  clock: Callable[[], float] = time.time, manual: bool = False):
         self.store, self.policy, self.spec, self.grid = store, policy, spec, grid
         self.distance = distance or GridDistance(grid)
+        self.cell_size_m = grid.cell_size          # for maps an activate brings
         self.config = config or Config()
         self.clock = clock
         self.session = uuid.uuid4().hex
@@ -221,6 +222,12 @@ class Coordinator:
         """Load persisted state and start a new epoch (fences off older commands)."""
         self.epoch = self.store.next_epoch()
         self.paused = bool(self.store.get_meta("paused", self.default_manual))
+        map_yaml = self.store.get_meta("map_yaml")
+        if map_yaml:
+            try:
+                self._load_map(map_yaml)
+            except ValueError as e:
+                log.warning("keeping the configured grid: %s", e)
         for d in self.store.get_meta("docks", []):
             self._add_dock(d)
         for row in self.store.load_items():
@@ -484,15 +491,31 @@ class Coordinator:
             return {"ok": False, "error": str(e)}, []
 
     def _op_activate(self, op):
-        """Replace the dock layout. Refused while tasks are running."""
+        """Replace the dock layout, and the grid when the config brings its map
+        (map_yaml: a ROS map_server yaml this process can read). Refused while tasks are running."""
         if any(t.status in ACTIVE for t in self.tasks.values()):
             raise ValueError("tasks are active; cancel or finish them first")
+        if op.get("map_yaml"):
+            self._load_map(str(op["map_yaml"]))
         self.docks = {}
         for d in op["docks"]:
             self._add_dock(d)
-        self.store.set_meta("docks", [self._dock_row(d) for d in self.docks.values()])
+        meta = {"docks": [self._dock_row(d) for d in self.docks.values()]}
+        if op.get("map_yaml"):
+            meta["map_yaml"] = str(op["map_yaml"])
+        self.store.commit(meta=meta)
         self._trigger_round()
-        return {"ok": True, "docks": len(self.docks)}, []
+        return {"ok": True, "docks": len(self.docks), "grid": [self.grid.height, self.grid.width]}, []
+
+    def _load_map(self, map_yaml: str):
+        try:
+            grid = Grid.from_map_yaml(map_yaml, cell_size=self.cell_size_m)
+        except (OSError, KeyError, ValueError) as e:
+            raise ValueError(f"cannot load map {map_yaml}: {e}") from e
+        self.grid = grid
+        if isinstance(self.distance, GridDistance):
+            self.distance = GridDistance(grid)
+        log.info("grid from %s: %d x %d cells of %.2f m", map_yaml, grid.height, grid.width, grid.cell_size)
 
     def _op_add_item(self, op):
         item_id = str(op["item_id"])

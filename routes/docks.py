@@ -257,7 +257,11 @@ def activate_config(config_id: int, db: Session = Depends(get_db_session)):
 
     if fleet_ops.bus_mode():
         with _fleet_errors():
-            reply = fleet_ops.call("activate", docks=fleet_ops.coordinator_docks(db, config_id))
+            args = {"docks": fleet_ops.coordinator_docks(db, config_id)}
+            map_cfg = db.query(MapConfig).filter(MapConfig.dock_config_id == config_id).first()
+            if map_cfg is not None:      # the coordinator plans on this config's map
+                args["map_yaml"] = str(MAP_STORAGE / map_cfg.map_yaml_filename)
+            reply = fleet_ops.call("activate", **args)
         return {"success": True, "active_config_id": cfg.id, "fleet_mode": "bus", "docks": reply["docks"]}
 
     activate_docks(redis_client, db, config_id)

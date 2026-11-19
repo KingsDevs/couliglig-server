@@ -418,6 +418,29 @@ class TestRegistration:
         assert all(final[t] == "SUCCEEDED" for t in running)
         assert f.coord.metrics["commands"] == commands      # nothing new was sent
 
+    def test_activate_brings_the_configs_map(self, tmp_path):
+        # a 6 m x 3 m free map whose origin is at (-2, -1)
+        (tmp_path / "m.pgm").write_bytes(b"P5\n120 60\n255\n" + bytes([254]) * 120 * 60)
+        (tmp_path / "m.yaml").write_text("image: m.pgm\nresolution: 0.05\norigin: [-2.0, -1.0, 0]\n"
+                                         "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n")
+        docks = [{"id": "P0", "type": "pickup", "x": -1.5, "y": 1.5}, {"id": "R0", "type": "receiver", "x": 3.5, "y": 0.0}]
+
+        def start():
+            c = Coordinator(Store(tmp_path / "coordinator.db"), StayPolicy(SPEC), SPEC, Grid.open(40, 40))
+            c.start()
+            return c
+
+        c = start()
+        reply, _ = c.handle_op({"op": "activate", "docks": docks, "map_yaml": str(tmp_path / "m.yaml")})
+        assert reply["ok"] and reply["grid"] == [4, 8]
+        assert c.docks["P0"].cell == (0, 0) and c.grid.free(c.docks["R0"].cell)
+        c.store.close()
+        again = start()                              # the map is kept across restarts
+        assert (again.grid.height, again.grid.width) == (4, 8)
+        assert again.docks["R0"].cell == c.docks["R0"].cell
+        reply, _ = again.handle_op({"op": "activate", "docks": docks, "map_yaml": str(tmp_path / "nope.yaml")})
+        assert not reply["ok"] and "cannot load map" in reply["error"]
+
     def test_state_survives_restart_from_disk(self, tmp_path):
         store = Store(tmp_path / "coordinator.db")
         f = fleet(items=3, store=store)

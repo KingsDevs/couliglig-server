@@ -21,9 +21,15 @@ def build(config: dict) -> tuple[Coordinator, str]:
     policy, spec = make_policy(config["policy"])
     grid_cfg = config.get("grid", {})
     cell = float(grid_cfg.get("cell_size_m", CELL_SIZE_M))
-    if grid_cfg.get("map_yaml"):
-        grid = Grid.from_map_yaml(grid_cfg["map_yaml"], cell_size=cell)
+    # The map normally comes with the activated dock config (POST /dock/activate sends the
+    # config's map and the coordinator keeps it); grid.map_yaml is only a starting map.
+    map_yaml = grid_cfg.get("map_yaml")
+    if map_yaml and Path(map_yaml).exists():
+        grid = Grid.from_map_yaml(map_yaml, cell_size=cell)
     else:
+        if map_yaml:
+            logging.getLogger(__name__).warning(
+                "grid.map_yaml %s not found: waiting for a dock config activate to bring its map", map_yaml)
         grid = Grid.open(int(grid_cfg.get("width", 40)), int(grid_cfg.get("height", 40)), cell_size=cell)
     timing = Config(**config.get("timing", {}))
     store = Store(config.get("db", "db/coordinator.db"))

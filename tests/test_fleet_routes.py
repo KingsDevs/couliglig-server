@@ -78,6 +78,17 @@ class TestBus:
             {"id": HANDOFF, "type": "hand_off", "x": 0.0, "y": 0.0, "yaw": 0.0},
         ]
         assert not fake_redis.exists("docks:all")          # Redis is not the runtime any more
+        assert "map_yaml" not in args                      # this config has no map
+
+    def test_activate_sends_the_configs_map(self, client, config_id, coordinator, db_session):  # noqa: F811
+        from schema import MapConfig
+        db_session.add(MapConfig(dock_config_id=config_id, map_yaml_filename="floor.yaml",
+                                 map_image_filename="floor.pgm"))
+        db_session.commit()
+        calls, replies = coordinator
+        replies["activate"] = {"ok": True, "docks": 3}
+        assert client.post(f"/dock/activate?config_id={config_id}").status_code == 200
+        assert calls[0][1]["map_yaml"] == "db/maps/floor.yaml"
 
     def test_add_item(self, client, coordinator):  # noqa: F811
         calls, _ = coordinator

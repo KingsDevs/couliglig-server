@@ -22,7 +22,11 @@ services:
       - ./db:/app/db
       # Optional dnsmasq-managed hosts file (host -> container)
       # - /var/lib/dnsmasq/robots.hosts:/data/robots.hosts
-    # environment:
+    environment:
+      # legacy (each robot's RL loop) | bus (the coordinator below runs the fleet).
+      # Set FLEET_MODE=bus in this directory's .env; the robots switch with it.
+      - FLEET_MODE=${FLEET_MODE:-legacy}
+      - AMQP_URL=amqp://${RABBITMQ_USER:-couliglig}:${RABBITMQ_PASS:-change-me}@rabbitmq:5672/
     #   - HOSTS_FILE=/data/robots.hosts
     ports:
       - "8000:8000"

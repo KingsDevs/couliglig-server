@@ -7,7 +7,10 @@ control: manual    # manual | auto on a fresh db; after that the last setting is
 
 grid:
   cell_size_m: 0.75            # one training-grid cell (see the plan's grid-scale answer)
-  map_yaml: db/maps/map.yaml   # the map the robots navigate; without it: an open width x height grid
+  # The grid comes from the activated dock config's map (POST /dock/activate sends it and the
+  # coordinator keeps it across restarts). map_yaml is only a starting map; a missing file
+  # is fine (an open width x height grid until the first activate).
+  map_yaml: db/maps/map.yaml
   # width: 40
   # height: 40
 
