@@ -69,6 +69,7 @@ class Transporter:
     zone: bool = False
     free_in: float = 0.0
     carried: list[int] = field(default_factory=list)
+    busy: bool = False          # on a trip (or held for a picker's hand-off)
 
 
 @dataclass
@@ -150,7 +151,8 @@ class World:
         transporters = [Transporter(id=int(t["id"]), cell=_cell(t["cell"]), dest=_cell(t["dest"]),
                                     cap=float(t["cap"]), load=float(t["load"]), zone=bool(t["zone"]),
                                     free_in=float(t["free_in"]),
-                                    carried=[index_of[int(i)] for i in t["carried"]])
+                                    carried=[index_of[int(i)] for i in t["carried"]],
+                                    busy=bool(t.get("busy", float(t["free_in"]) > 0)))
                         for t in f["transporters"]]
         zones = [Zone(id=int(z["id"]), cell=_cell(z["cell"]), occ=bool(z["occ"])) for z in f["zones"]]
         table = DistanceTable.from_blocks(f["dist"])

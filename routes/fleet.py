@@ -1,4 +1,4 @@
-"""Fleet coordinator operator calls (FLEET_MODE=bus): state, pause, e-stop, resume.
+"""Fleet coordinator operator calls (FLEET_MODE=bus): state, pause, e-stop, resume, policy.
 
 Items and dock layouts go through the usual /dock/add-item, /dock/remove-item and
 /dock/activate, which forward to the coordinator in bus mode.
@@ -13,6 +13,10 @@ router = APIRouter(prefix="/fleet", tags=["fleet"])
 
 class EStopRequest(BaseModel):
     reason: str = ""
+
+
+class PolicyRequest(BaseModel):
+    policy: str          # stay | greedy | marl_onnx (GET /fleet/snapshot lists what is available)
 
 
 def _call(op: str, **args) -> dict:
@@ -47,6 +51,13 @@ def pause():
 def resume():
     """End a pause or an e-stop."""
     return _call("resume")
+
+
+@router.post("/policy")
+def set_policy(request: PolicyRequest):
+    """Who decides in auto: a heuristic (stay, greedy) or the RL model. Kept across
+    coordinator restarts; running tasks finish as they were planned."""
+    return _call("set_policy", policy=request.policy)
 
 
 @router.post("/estop")

@@ -14,13 +14,18 @@ grid:
   # width: 40
   # height: 40
 
-policy:
-  primary: stay                # marl_onnx once the round 2 model is confirmed. Not greedy:
-  fallback: stay               # greedy transporters hop between free zones (as in the env)
+policy:                        # the default; operators switch at run time (POST /fleet/policy)
+  primary: stay                # stay | greedy | assign | marl_onnx. Not greedy: its
+  fallback: stay               # transporters hop between free zones (as in the env)
   decide_timeout_ms: 200
   marl_onnx:
     model_dir: policy_models/imit_pointer_obs_tc-round_2
     deterministic: true
+  assign:                      # assign_policy.py's tuning (these are its defaults)
+    lam: 1.0                   # weight of an item's remaining route (critical path)
+    beta: 1.0                  # zone balancing
+    phase: true                # lam scaled by pickers / items left
+    wait: 1.0                  # a loaded transporter waits for a box this close
 
 timing:                        # coordinator.core.Config; defaults shown
   stale_s: 3.0

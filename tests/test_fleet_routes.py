@@ -133,8 +133,16 @@ class TestBus:
         assert client.post("/fleet/estop", json={"reason": "door open"}).status_code == 200
         assert client.post("/fleet/resume").status_code == 200
         assert client.post("/fleet/pause").status_code == 200
-        assert [c[0] for c in calls] == ["snapshot", "estop", "resume", "pause"]
+        assert client.post("/fleet/policy", json={"policy": "marl_onnx"}).status_code == 200
+        assert [c[0] for c in calls] == ["snapshot", "estop", "resume", "pause", "set_policy"]
         assert calls[1][1] == {"reason": "door open"}
+        assert calls[4][1] == {"policy": "marl_onnx"}
+
+    def test_unknown_policy_is_400(self, client, coordinator):  # noqa: F811
+        _, replies = coordinator
+        replies["set_policy"] = fleet_ops.FleetRefused("unknown policy 'random'")
+        r = client.post("/fleet/policy", json={"policy": "random"})
+        assert (r.status_code, r.json()["detail"]) == (400, "unknown policy 'random'")
 
 
 @pytest.fixture()

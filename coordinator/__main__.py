@@ -12,13 +12,14 @@ import yaml
 
 from coordinator.core import Config, Coordinator
 from coordinator.grid import CELL_SIZE_M, Grid
-from coordinator.policies import make_policy
+from coordinator.policies import make_policy_set
 from coordinator.service import CoordinatorService
 from coordinator.store import Store
 
 
 def build(config: dict) -> tuple[Coordinator, str]:
-    policy, spec = make_policy(config["policy"])
+    # every choice (stay, greedy, the RL model) for operators to switch between; primary first
+    choices, unavailable, default, spec = make_policy_set(config["policy"])
     grid_cfg = config.get("grid", {})
     cell = float(grid_cfg.get("cell_size_m", CELL_SIZE_M))
     # The map normally comes with the activated dock config (POST /dock/activate sends the
@@ -40,7 +41,8 @@ def build(config: dict) -> tuple[Coordinator, str]:
     control = str(config.get("control", "manual")).strip().lower()
     if control not in ("manual", "auto"):
         raise SystemExit(f"control must be 'manual' or 'auto', not {control!r}")
-    return Coordinator(store, policy, spec, grid, config=timing, manual=control == "manual"), url
+    return Coordinator(store, choices[default], spec, grid, config=timing, manual=control == "manual",
+                       choices=choices, unavailable=unavailable, policy_name=default), url
 
 
 def main():

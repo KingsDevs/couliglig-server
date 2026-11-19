@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional
 
 from coordinator.grid import Grid, GridDistance
+from coordinator.policies import POLICY_CHOICES
 from coordinator.policies.base import Decider, DecisionPolicy, DecisionRequest, decode, is_legal
 from coordinator.protocol import PROTOCOL_HASH, Envelope, make
 from coordinator.protocol import messages as m
@@ -189,8 +190,14 @@ class CoordinatorFeasibility:
 class Coordinator:
     def __init__(self, store: Store, policy: DecisionPolicy, spec: PolicySpec, grid: Grid,
                  distance: Callable | None = None, config: Config | None = None,
-                 clock: Callable[[], float] = time.time, manual: bool = False):
+                 clock: Callable[[], float] = time.time, manual: bool = False,
+                 choices: dict[str, DecisionPolicy] | None = None, unavailable: dict[str, str] | None = None,
+                 policy_name: str | None = None):
         self.store, self.policy, self.spec, self.grid = store, policy, spec, grid
+        # Policies an operator can switch between (set_policy); `policy` is the default.
+        self.policy_name = policy_name or getattr(policy, "name", "?")
+        self.choices = dict(choices or {self.policy_name: policy})
+        self.unavailable = dict(unavailable or {})
         self.distance = distance or GridDistance(grid)
         self.cell_size_m = grid.cell_size          # for maps an activate brings
         self.config = config or Config()
@@ -222,6 +229,12 @@ class Coordinator:
         """Load persisted state and start a new epoch (fences off older commands)."""
         self.epoch = self.store.next_epoch()
         self.paused = bool(self.store.get_meta("paused", self.default_manual))
+        saved_policy = self.store.get_meta("policy")
+        if saved_policy in self.choices:
+            self.policy, self.policy_name = self.choices[saved_policy], saved_policy
+        elif saved_policy:
+            log.warning("saved policy %s is not available (%s); using %s", saved_policy,
+                        self.unavailable.get(saved_policy, "unknown"), self.policy_name)
         map_yaml = self.store.get_meta("map_yaml")
         if map_yaml:
             try:
@@ -242,9 +255,10 @@ class Coordinator:
                 self.robots[t.robot_id].task_id = t.id
             if t.slot:
                 self.slots[t.slot] = t.robot_id
-        log.info("coordinator epoch %d: %d docks, %d items, %d robots, %d active tasks; %s",
+        log.info("coordinator epoch %d: %d docks, %d items, %d robots, %d active tasks; %s; policy %s%s",
                  self.epoch, len(self.docks), len(self.items), len(self.robots), len(self.tasks),
-                 "MANUAL (no new tasks until resume)" if self.paused else "AUTO")
+                 "MANUAL (no new tasks until resume)" if self.paused else "AUTO", self.policy_name,
+                 "".join(f" ({n} unavailable: {r})" for n, r in self.unavailable.items()))
         self._trigger_round()
         return self.epoch
 
@@ -556,6 +570,25 @@ class Coordinator:
         return {"ok": True}, [self._broadcast("coordinator.resume", m.Resume(issued_by=op.get("issued_by", ""))),
                               self._heartbeat_out()]
 
+    def _op_set_policy(self, op):
+        """Decide with another policy from the next round on; running tasks are not touched."""
+        name = str(op["policy"])
+        if name in self.unavailable:
+            raise ValueError(f"policy {name} is not available: {self.unavailable[name]}")
+        if name not in self.choices:
+            raise ValueError(f"unknown policy {name!r}; choose one of {sorted(self.choices)}")
+        self.policy, self.policy_name = self.choices[name], name
+        self.store.commit(meta={"policy": name})
+        log.info("policy -> %s", name)
+        self._trigger_round()
+        return {"ok": True, "policy": name}, [self._heartbeat_out()]
+
+    def _policy_list(self) -> list[dict]:
+        names = [n for n in POLICY_CHOICES if n in self.choices or n in self.unavailable]
+        names += [n for n in self.choices if n not in names]
+        return [{"name": n, "label": POLICY_CHOICES.get(n, (n, ""))[0], "kind": POLICY_CHOICES.get(n, ("", "other"))[1],
+                 "available": n in self.choices, "reason": self.unavailable.get(n)} for n in names]
+
     def _op_estop(self, op):
         self._set_paused(True)
         return {"ok": True}, [self._broadcast("coordinator.estop",
@@ -563,7 +596,8 @@ class Coordinator:
 
     def _op_snapshot(self, op):
         return {"ok": True, "epoch": self.epoch, "paused": self.paused,
-                "control": "manual" if self.paused else "auto", "metrics": dict(self.metrics),
+                "control": "manual" if self.paused else "auto",
+                "policy": self.policy_name, "policies": self._policy_list(), "metrics": dict(self.metrics),
                 "robots": {r.id: {"role": r.role, "robot_type": r.robot_type, "status": r.status,
                                   "exec_state": r.exec_state, "task": r.task_id, "zone": r.zone,
                                   "parked": r.parked, "carried": list(r.carried), "held_item": r.held_item,
@@ -863,7 +897,7 @@ class Coordinator:
             carried = [i_index[i] for i in r.carried if i in i_index]
             world_transporters.append(Transporter(id=rid, cell=self._cell(rid), dest=dest, cap=r.capacity,
                                                   load=r.capacity - self._room(r), zone=r.zone is not None,
-                                                  free_in=free_in, carried=carried))
+                                                  free_in=free_in, carried=carried, busy=busy or free_in > 0))
 
         world_zones = [Zone(id=z, cell=self.docks[z].cell, occ=self._zone_holder(z) is not None) for z in zones]
         world = World(items=world_items, pickers=world_pickers, transporters=world_transporters, zones=world_zones,
@@ -947,7 +981,7 @@ class Coordinator:
 
     def _heartbeat_out(self) -> Out:
         return self._broadcast("coordinator.heartbeat",
-                               m.CoordinatorHeartbeat(epoch=self.epoch, policy=getattr(self.policy, "name", "?"),
+                               m.CoordinatorHeartbeat(epoch=self.epoch, policy=self.policy_name,
                                                       paused=self.paused))
 
     def _save(self, *, items=(), tasks=(), robots=(), event=None):

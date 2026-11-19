@@ -17,7 +17,7 @@ from coordinator.core import (
     ACTIVE, AVAILABLE, CLAIMED, DELIVERED, HELD, OFFLINE, REFUSED, Config, Coordinator,
 )
 from coordinator.grid import Grid
-from coordinator.policies import FallbackPolicy, GreedyPolicy, MarlOnnxPolicy, StayPolicy
+from coordinator.policies import AssignPolicy, FallbackPolicy, GreedyPolicy, MarlOnnxPolicy, StayPolicy
 from coordinator.protocol import make
 from coordinator.protocol import messages as m
 from coordinator.sim.fake_robot import FakeRobot
@@ -83,7 +83,7 @@ def delivered_once(f: SimFleet) -> bool:
 
 class TestEndToEnd:
 
-    @pytest.mark.parametrize("policy_cls", [GreedyPolicy, StayPolicy])
+    @pytest.mark.parametrize("policy_cls", [GreedyPolicy, StayPolicy, AssignPolicy])
     def test_heuristics_deliver_everything(self, policy_cls):
         f = fleet(policy=policy_cls(SPEC), items=6)
         assert f.run(900, until=f.all_delivered), f.op({"op": "snapshot"})
@@ -418,6 +418,47 @@ class TestRegistration:
         assert all(final[t] == "SUCCEEDED" for t in running)
         assert f.coord.metrics["commands"] == commands      # nothing new was sent
 
+    def test_operator_picks_the_policy(self, tmp_path):
+        from coordinator.policies import make_policy_set
+        config = {"primary": "stay", "fallback": "stay", "marl_onnx": {"model_dir": str(MODEL_DIR)}}
+        grid, _ = layout()
+
+        def start():
+            choices, unavailable, default, spec = make_policy_set(config)
+            c = Coordinator(Store(tmp_path / "coordinator.db"), choices[default], spec, grid,
+                            choices=choices, unavailable=unavailable, policy_name=default)
+            c.start()
+            return c
+
+        c = start()
+        snap = c.handle_op({"op": "snapshot"})[0]
+        assert snap["policy"] == "stay"
+        assert [(p["name"], p["kind"], p["available"]) for p in snap["policies"]] == [
+            ("stay", "heuristic", True), ("greedy", "heuristic", True), ("assign", "heuristic", True),
+            ("marl_onnx", "rl", True)]
+        reply, outs = c.handle_op({"op": "set_policy", "policy": "marl_onnx"})
+        assert reply == {"ok": True, "policy": "marl_onnx"}
+        assert outs[0].envelope.body().policy == "marl_onnx"          # robots see it in the heartbeat
+        assert c.policy is c.choices["marl_onnx"] and c.policy.fallback is c.choices["stay"]
+        assert not c.handle_op({"op": "set_policy", "policy": "random"})[0]["ok"]
+        c.store.close()
+        assert start().policy_name == "marl_onnx"                    # kept across restarts
+
+    def test_a_broken_model_is_unavailable_not_fatal(self, tmp_path):
+        from coordinator.policies import make_policy_set
+        (tmp_path / "model").mkdir()
+        for f in ("policy.json", "fixtures.json"):
+            (tmp_path / "model" / f).write_bytes((MODEL_DIR / f).read_bytes())   # no .onnx files
+        choices, unavailable, default, spec = make_policy_set(
+            {"primary": "marl_onnx", "fallback": "greedy", "marl_onnx": {"model_dir": str(tmp_path / "model")}})
+        assert sorted(choices) == ["assign", "greedy", "stay"] and "marl_onnx" in unavailable
+        assert default == "greedy"                                   # primary unavailable: the fallback
+        c = Coordinator(Store(), choices[default], spec, layout()[0], choices=choices,
+                        unavailable=unavailable, policy_name=default)
+        c.start()
+        reply = c.handle_op({"op": "set_policy", "policy": "marl_onnx"})[0]
+        assert not reply["ok"] and "not available" in reply["error"]
+
     def test_activate_brings_the_configs_map(self, tmp_path):
         # a 6 m x 3 m free map whose origin is at (-2, -1)
         (tmp_path / "m.pgm").write_bytes(b"P5\n120 60\n255\n" + bytes([254]) * 120 * 60)
@@ -461,9 +502,10 @@ class TestRegistration:
 
 class TestRoundCost:
 
-    @pytest.mark.parametrize("policy", ["greedy", "marl"])
+    @pytest.mark.parametrize("policy", ["greedy", "assign", "marl"])
     def test_round_for_15_robots_under_100ms(self, policy):
-        chosen = GreedyPolicy(SPEC) if policy == "greedy" else MarlOnnxPolicy(MODEL_DIR, verify=False)
+        chosen = {"greedy": GreedyPolicy(SPEC), "assign": AssignPolicy(SPEC)}.get(policy) \
+            or MarlOnnxPolicy(MODEL_DIR, verify=False)
         f = fleet(pickers=10, transporters=5, items=6, policy=chosen, width=40, height=24, pickups=6, zones=5)
         f.coord.metrics["max_round_ms"] = 0.0
         f.run(60.0)
