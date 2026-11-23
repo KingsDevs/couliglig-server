@@ -139,6 +139,58 @@ def _remove_robot_from_redis(hostname: str, session: str | None = None) -> bool:
     return bool(removed)
 
 
+# A robot's entry is refreshed by every heartbeat on its /robots/ws socket (every 5 s;
+# the socket is dropped after 15 s of silence). An entry older than this belongs to no
+# live socket: e.g. the server restarted while the robot was connected, so that socket's
+# cleanup never ran, and Redis kept the entry. The pruner removes such entries.
+ROBOT_STALE_S = float(os.getenv("ROBOT_STALE_S", "30"))
+ROBOT_PRUNE_INTERVAL_S = 10.0
+
+
+def _entry_time(entry) -> datetime | None:
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return datetime.fromisoformat(str(entry.get("timestamp", "")).rstrip("Z"))
+    except ValueError:
+        return None
+
+
+def prune_stale_robots(now: datetime | None = None) -> list[dict]:
+    """Remove robot_ips entries with no heartbeat for ROBOT_STALE_S (or no timestamp
+    at all); shorten their dock locks as a disconnect does. Returns the removed entries."""
+    now = now or datetime.now()          # timestamps are written with datetime.now() too
+    removed: list[dict] = []
+
+    def fn(ip_dict):
+        removed.clear()                  # fn reruns when the WATCH fails
+        for hostname, entry in list(ip_dict.items()):
+            ts = _entry_time(entry)
+            if ts is None or (now - ts).total_seconds() > ROBOT_STALE_S:
+                ip_dict.pop(hostname)
+                removed.append(entry if isinstance(entry, dict) else {"hostname": hostname, "ip": entry})
+        return bool(removed)
+
+    _mutate_robot_ips(fn)
+    for entry in removed:
+        logging.warning(f"[robot-ws] {entry.get('hostname')} removed from robot_ips: "
+                        f"no heartbeat since {entry.get('timestamp') or 'ever'}")
+        if entry.get("ros_domain_id") is not None:
+            shorten_robot_locks(redis_client, _robot_namespace(entry["ros_domain_id"]))
+    return removed
+
+
+async def prune_stale_robots_forever(interval: float = ROBOT_PRUNE_INTERVAL_S):
+    """Background task (main.py): prune now, then every interval; tell the dashboards."""
+    while True:
+        try:
+            if prune_stale_robots():
+                await _broadcast_online()
+        except Exception as e:
+            logging.warning(f"[robot-ws] pruning robot_ips failed: {e}")
+        await asyncio.sleep(interval)
+
+
 @register_router.websocket("/ws")
 async def robot_websocket(websocket: WebSocket):
     await websocket.accept()

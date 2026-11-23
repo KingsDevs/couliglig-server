@@ -1,6 +1,10 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes import register_router, docks_router, maps_router, actions_router, rl_router, mapping_router, fleet_router
+from routes.robots import prune_stale_robots_forever
 from fastapi.responses import HTMLResponse
 from services import get_db_session
 from services.register_host import get_hosts_file
@@ -11,7 +15,16 @@ import html
 session = get_db_session()
 session.close()
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # robot_ips lives in Redis and outlives this process: drop entries no socket refreshes
+    pruner = asyncio.create_task(prune_stale_robots_forever())
+    yield
+    pruner.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

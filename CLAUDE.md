@@ -46,7 +46,7 @@ Activating a dock config copies it from SQLite into Redis. All runtime operation
 - `main.py` — FastAPI app, mounts all routers
 - `routes/` — Thin HTTP handlers; business logic lives in services
 - `services/redis_dock_runtime.py` — Core dock lifecycle logic (~750 lines); all Redis key patterns are defined here
-- `services/robot_watcher.py` — Background daemon; health-checks each robot every 5s via `GET /status/health`, removes offline robots from Redis
+- `routes/robots.py` — robot registry in Redis `robot_ips`: each robot's `/robots/ws` socket registers it and heartbeats every 5 s; a background task (`prune_stale_robots_forever`, started in `main.py`) removes entries with no heartbeat for `ROBOT_STALE_S` (30 s), e.g. ones left over from a server restart
 - `definitions/dock_types.py` — `DockType` and `DockStatus` enums used everywhere
 
 ### Dock lifecycle
