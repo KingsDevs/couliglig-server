@@ -99,7 +99,7 @@ services:
       - sam3-hf-cache:/hf-cache
     ports:
       - "5557:5557"
-    command: ["python", "-m", "sam3_server", "--host", "0.0.0.0", "--port", "5557"]
+    command: ["python3", "-m", "sam3_server", "--host", "0.0.0.0", "--port", "5557"]
 
   # robot-watcher:
   #   build:

@@ -1,31 +1,39 @@
 # SAM3 server for the Jetson Orin Nano (JetPack 6.2, L4T R36, CUDA 12.6, arm64).
 #
-# Base: NVIDIA's PyTorch "igpu" image for Jetson, the last tag built on CUDA 12.6
-# (newer tags are CUDA 12.8+ and would lean on forward compatibility). It ships
-# torch 2.6.0a0, numpy 1.26.4, Python 3.12 and OpenCV 4.10 (cv2), so none of those
-# are pip-installed here; the constraint file stops pip from replacing them.
+# Base: jetson-containers' PyTorch image: a stable torch 2.7.0 built for JetPack 6 /
+# CUDA 12.6 (sm_87), Python 3.10 in /opt/venv, numpy < 2. NVIDIA's own
+# nvcr.io/nvidia/pytorch:24.12-py3-igpu does NOT work: its pre-release torch
+# 2.6.0a0 lacks torch.accelerator, which transformers 5 calls when importing Sam3Model.
 #
-# transformers stays below 5.20: from 5.20 on it requires torch >= 2.6, and the
-# pre-release 2.6.0a0 counts as older, which silently turns torch off. The
-# check at the end fails the build if that or a missing Sam3Model ever happens.
+# transformers: 5.20 is the last release for Python 3.10 (5.21+ need 3.11).
+# The constraint file keeps pip from replacing the image's torch/numpy, and the
+# import check at the end fails the build (not the first request) on a mismatch.
 #
-# Build/run on the Jetson: docker compose --profile sam3 up -d --build sam3
+# Build/run on the Jetson (COMPOSE_PROFILES=sam3 in .env): docker compose up -d --build sam3
 
-FROM nvcr.io/nvidia/pytorch:24.12-py3-igpu
+FROM dustynv/pytorch:2.7-r36.4.0
 
-ENV PYTHONUNBUFFERED=1
+# The image's baked-in index (pypi.jetson-ai-lab.dev) is gone (HTTP 410); torch is
+# already installed, everything below comes from PyPI.
+ENV PIP_INDEX_URL=https://pypi.org/simple \
+    PIP_EXTRA_INDEX_URL= \
+    PIP_VERBOSE=0 \
+    PYTHONUNBUFFERED=1
 
-RUN python -c "import torch, numpy; print(f'torch=={torch.__version__}'); print(f'numpy=={numpy.__version__}')" \
+# torchvision (in the base image) is required by Sam3Processor's image processor.
+RUN python3 -c "import torch, torchvision, numpy; print(f'torch=={torch.__version__}'); \
+print(f'torchvision=={torchvision.__version__}'); print(f'numpy=={numpy.__version__}')" \
         > /tmp/base-constraints.txt \
  && cat /tmp/base-constraints.txt \
- && pip install --no-cache-dir -c /tmp/base-constraints.txt \
-        "transformers>=5.0,<5.20" \
+ && pip3 install --no-cache-dir -c /tmp/base-constraints.txt \
+        "transformers>=5.0,<5.21" \
+        opencv-python-headless \
         pyzmq \
         msgpack \
         msgpack-numpy \
         scikit-learn \
         pillow \
- && python -c "import cv2, sklearn, zmq, msgpack_numpy, torch; \
+ && python3 -c "import cv2, sklearn, zmq, msgpack_numpy, torch, torchvision; \
 from transformers.utils import is_torch_available; \
 assert is_torch_available(), 'transformers disabled torch ' + torch.__version__; \
 from transformers import Sam3Model, Sam3Processor; \
@@ -35,4 +43,4 @@ WORKDIR /app
 COPY sam3_server /app/sam3_server
 
 EXPOSE 5557
-CMD ["python", "-m", "sam3_server"]
+CMD ["python3", "-m", "sam3_server"]

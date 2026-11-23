@@ -89,8 +89,8 @@ Tests: `tests/test_coordinator_policy.py` (fixtures), `tests/test_coordinator_pr
 
 Text-prompt segmentation + grasp server, moved from GraspGen-couliglig (which keeps its own copy). ZMQ REQ/REP on 5557, msgpack + msgpack-numpy; actions `infer` (image + organized cloud + text -> ranked grasps, zed_camera frame, metres), `segment` (mask only), `metadata`, `health`. Clients: couliglig-main's `couliglig_grasp_bridge` / `robotic_arm_utils` (`sam3_host`, `sam3_port`). `infer` forwards the cleaned cloud to the GraspGen ZMQ server (5556) on the GPU PC (`GRASPGEN_HOST`); `--pose-mode manual` skips GraspGen.
 
-- Own container on the Jetson (Orin Nano 8 GB, JetPack 6.2): `Dockerfile.sam3` on `nvcr.io/nvidia/pytorch:24.12-py3-igpu`, compose service `sam3` behind the `sam3` profile (`docker compose --profile sam3 up -d --build sam3`). `HF_TOKEN` (gated `facebook/sam3`) and `GRASPGEN_HOST` come from `.env`.
-- Keep torch/transformers out of `requirements.txt`. `transformers` stays `<5.20` (5.20+ rejects the image's torch `2.6.0a0`).
+- Own container on the Jetson (Orin Nano 8 GB, JetPack 6.2): `Dockerfile.sam3` on `dustynv/pytorch:2.7-r36.4.0` (stable torch 2.7, CUDA 12.6, Python 3.10), compose service `sam3` behind the `sam3` profile. The Jetson's `.env` sets `COMPOSE_PROFILES=sam3` (so plain `docker compose up` includes it) and `HF_TOKEN` (gated `facebook/sam3`); `GRASPGEN_HOST` defaults to 192.168.20.113.
+- Keep torch/transformers out of `requirements.txt`. `transformers` is `<5.21` (5.21+ needs Python 3.11). Don't use NVIDIA's `pytorch:24.12-py3-igpu`: its torch `2.6.0a0` lacks `torch.accelerator`, which Sam3Model needs.
 - Only `segmenter.py` imports torch; `server.py` takes the segmenter as an argument, so `tests/test_sam3_server.py` runs the protocol with a fake model and a fake GraspGen. Those tests need `pip install -r requirements-sam3.txt` and skip without it.
 
 ### Test isolation

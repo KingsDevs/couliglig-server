@@ -3,7 +3,7 @@
 # This file is the light half, enough for tests/test_sam3_server.py and the client:
 #   pip install -r requirements-sam3.txt
 # The Jetson image (Dockerfile.sam3) gets torch, numpy and OpenCV from its base
-# image and adds transformers>=5.0,<5.20 itself.
+# image and adds transformers>=5.0,<5.21 itself.
 pyzmq>=25
 msgpack>=1.0
 msgpack-numpy>=0.4.8
