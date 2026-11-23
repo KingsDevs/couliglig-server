@@ -1,0 +1,38 @@
+# SAM3 server for the Jetson Orin Nano (JetPack 6.2, L4T R36, CUDA 12.6, arm64).
+#
+# Base: NVIDIA's PyTorch "igpu" image for Jetson, the last tag built on CUDA 12.6
+# (newer tags are CUDA 12.8+ and would lean on forward compatibility). It ships
+# torch 2.6.0a0, numpy 1.26.4, Python 3.12 and OpenCV 4.10 (cv2), so none of those
+# are pip-installed here; the constraint file stops pip from replacing them.
+#
+# transformers stays below 5.20: from 5.20 on it requires torch >= 2.6, and the
+# pre-release 2.6.0a0 counts as older, which silently turns torch off. The
+# check at the end fails the build if that or a missing Sam3Model ever happens.
+#
+# Build/run on the Jetson: docker compose --profile sam3 up -d --build sam3
+
+FROM nvcr.io/nvidia/pytorch:24.12-py3-igpu
+
+ENV PYTHONUNBUFFERED=1
+
+RUN python -c "import torch, numpy; print(f'torch=={torch.__version__}'); print(f'numpy=={numpy.__version__}')" \
+        > /tmp/base-constraints.txt \
+ && cat /tmp/base-constraints.txt \
+ && pip install --no-cache-dir -c /tmp/base-constraints.txt \
+        "transformers>=5.0,<5.20" \
+        pyzmq \
+        msgpack \
+        msgpack-numpy \
+        scikit-learn \
+        pillow \
+ && python -c "import cv2, sklearn, zmq, msgpack_numpy, torch; \
+from transformers.utils import is_torch_available; \
+assert is_torch_available(), 'transformers disabled torch ' + torch.__version__; \
+from transformers import Sam3Model, Sam3Processor; \
+import transformers; print('torch', torch.__version__, 'transformers', transformers.__version__, 'cv2', cv2.__version__)"
+
+WORKDIR /app
+COPY sam3_server /app/sam3_server
+
+EXPOSE 5557
+CMD ["python", "-m", "sam3_server"]

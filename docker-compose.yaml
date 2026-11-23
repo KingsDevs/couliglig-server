@@ -74,6 +74,33 @@ services:
     networks:
       - couliglig_network
 
+  # SAM3 text-prompt segmentation + grasp server (sam3_server/), ZMQ on 5557.
+  # Opt-in: docker compose --profile sam3 up -d --build sam3
+  # Needs the Jetson's nvidia runtime and, in .env, HF_TOKEN (facebook/sam3 is
+  # gated) and GRASPGEN_HOST (the GraspGen-couliglig machine). The weights
+  # (~3.4 GB) download once into the sam3-hf-cache volume.
+  sam3:
+    profiles: ["sam3"]
+    build:
+      context: .
+      dockerfile: Dockerfile.sam3
+    image: couliglig-sam3
+    container_name: sam3
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      - GRASPGEN_HOST=${GRASPGEN_HOST:-192.168.20.113}
+      - GRASPGEN_PORT=${GRASPGEN_PORT:-5556}
+      - SAM3_POSE_MODE=${SAM3_POSE_MODE:-auto}   # manual: heuristic pose, no GraspGen
+      - SAM3_FP16=1
+      - HF_HOME=/hf-cache
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - sam3-hf-cache:/hf-cache
+    ports:
+      - "5557:5557"
+    command: ["python", "-m", "sam3_server", "--host", "0.0.0.0", "--port", "5557"]
+
   # robot-watcher:
   #   build:
   #     context: .
@@ -103,3 +130,4 @@ networks:
 
 volumes:
   rabbitmq-data:
+  sam3-hf-cache:
